@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { fetchDashboardNodes} from './api';
 
-const DEFAULT_CENTER = [-7.315, 110.443]; 
+const DEFAULT_CENTER = [-6.235045, 106.871906]; 
 
 // Komponen penyesuai ukuran kanvas Leaflet secara otomatis saat dimuat
 function MapResizeHandler() {
@@ -26,21 +27,56 @@ export default function Dashboard() {
         return () => clearInterval(timer);
     }, []);
 
-    // Data dummy node pendaki
-    const [nodes, setNodes] = useState([
-        { id: 'Node-01', name: 'Pendaki 1', lat: -7.315, lng: 110.443, battery: 85, isSos: false },
-        { id: 'Node-02', name: 'Pendaki 2', lat: -7.318, lng: 110.448, battery: 15, isSos: false },
-        { id: 'Node-03', name: 'Pendaki 3', lat: -7.312, lng: 110.439, battery: 45, isSos: true },
-    ]);
+    // Data node pendaki
+    const [nodes, setNodes] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
 
     const [sosAlert, setSosAlert] = useState(null);
+    const acknowledgedSos = useRef(new Set()); // "daftar centang"
 
-    // Deteksi sinyal SOS untuk memunculkan Pop-up Alert pertama kali
     useEffect(() => {
-        const emergencyNode = nodes.find(n => n.isSos === true);
-        if (emergencyNode) {
-            setSosAlert(emergencyNode);
+        const activeIds = new Set(nodes.filter((n) => n.isSos).map((n) => n.id));
+
+        // Hapus centang untuk node yang SOS-nya sudah mati
+        acknowledgedSos.current.forEach((id) => {
+            if (!activeIds.has(id)) acknowledgedSos.current.delete(id);
+        });
+
+        if (sosAlert) return; // modal sedang tampil, jangan ditimpa
+
+        const fresh = nodes.find((n) => n.isSos && !acknowledgedSos.current.has(n.id));
+        if (fresh) {
+            acknowledgedSos.current.add(fresh.id);
+            setSosAlert(fresh);
         }
+    }, [nodes, sosAlert]);
+
+    // Polling: ambil data dari server setiap 5 detik
+    useEffect(() => {
+        let cancelled = false;
+
+        async function load() {
+            try {
+                const data = await fetchDashboardNodes();
+                if (cancelled) return;
+                setNodes(data);
+                setError(null);
+            } catch (err) {
+                if (cancelled) return;
+                setError(err.message); // data lama tetap tampil, hanya banner error muncul
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        }
+
+        load();
+        const timer = setInterval(load, 5000);
+
+        return () => {
+            cancelled = true;
+            clearInterval(timer);
+        };
     }, []);
 
     return (
@@ -51,6 +87,17 @@ export default function Dashboard() {
                     BASECAMP PENDAKIAN PUNCAK WANGU
                 </h1>
             </header>
+
+            {error && (
+                <div className="bg-red-600 text-white text-xs font-mono px-6 py-2 text-center">
+                    KONEKSI KE SERVER TERPUTUS, data di layar mungkin sudah tidak terbaru
+                </div>
+            )}
+            {loading && (
+                <div className="bg-slate-200 text-slate-600 text-xs font-mono px-6 py-2 text-center">
+                    Memuat data pendaki...
+                </div>
+            )}
 
             {/* Main Operational Grid */}
             <main className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 bg-slate-100/70">
@@ -74,13 +121,13 @@ export default function Dashboard() {
                             scrollWheelZoom={true} 
                             className="h-full w-full absolute inset-0 rounded-b-2xl"
                         >
-                            <MapResizeHandler />
+                        <MapResizeHandler />
                             <TileLayer
                                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                                 noWrap={true}
                             />
-                            {nodes.map((node) => (
+                            {nodes.filter((node) => node.hasLocation).map((node) => (
                                 <Marker key={node.id} position={[node.lat, node.lng]}>
                                     <Popup>
                                         <div className="p-1 font-sans">
@@ -96,7 +143,7 @@ export default function Dashboard() {
                                             <div className="mt-2 text-xs flex justify-between gap-4 font-semibold">
                                                 <span>Baterai:</span>
                                                 <span className={node.isSos ? 'text-red-600 font-bold' : node.battery > 50 ? 'text-emerald-600' : 'text-amber-600'}>
-                                                    {node.battery}%
+                                                    {node.battery !== null ? `${node.battery}%` : 'TIDAK ADA DATA'}
                                                 </span>
                                             </div>
                                         </div>
@@ -163,14 +210,14 @@ export default function Dashboard() {
                                         <div className="flex items-center justify-between text-xs font-mono">
                                             <span className="text-slate-500 font-medium">ENERGY LEVEL</span>
                                             <span className={`font-bold ${batteryTheme.text}`}>
-                                                {node.battery}%
+                                                {node.battery !== null ? `${node.battery}%` : 'TIDAK ADA DATA'}
                                             </span>
                                         </div>
 
                                         <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-300/60">
                                             <div 
                                                 className={`h-full rounded-full transition-all duration-500 ${batteryTheme.bg}`}
-                                                style={{ width: `${node.battery}%` }}
+                                                style={{ width: `${node.battery ?? 0}%` }}
                                             ></div>
                                         </div>
                                     </div>
@@ -200,7 +247,7 @@ export default function Dashboard() {
                             </div>
                             <div className="flex justify-between">
                                 <span className="text-red-100">BATERAI:</span>
-                                <span className="font-bold text-white">{sosAlert.battery}%</span>
+                                <span className="font-bold text-white">{sosAlert.battery !== null ? `${sosAlert.battery}%` : 'TIDAK ADA DATA'}</span>
                             </div>
                         </div>
 
