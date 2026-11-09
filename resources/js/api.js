@@ -67,3 +67,12 @@ export async function fetchDashboardNodes() {
         return mapNode(n, detail);
     });
 }
+
+export async function resolveSos(dbId) {
+    const res = await fetch(`${API_BASE}/nodes/${dbId}/resolve`, {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+    });
+    // 409 = sudah tidak ada SOS aktif (misalnya sudah ditutup operator lain): anggap beres
+    if (!res.ok && res.status !== 409) throw new Error(`HTTP ${res.status}`);
+}

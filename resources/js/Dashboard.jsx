@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import { fetchDashboardNodes} from './api';
+import { fetchDashboardNodes, resolveSos } from './api';
 
 const DEFAULT_CENTER = [-6.235045, 106.871906]; 
 
@@ -33,12 +33,12 @@ export default function Dashboard() {
     const [error, setError] = useState(null);
 
     const [sosAlert, setSosAlert] = useState(null);
-    const acknowledgedSos = useRef(new Set()); // "daftar centang"
+    const acknowledgedSos = useRef(new Set()); // "daftar centang" modal popup
 
     useEffect(() => {
         const activeIds = new Set(nodes.filter((n) => n.isSos).map((n) => n.id));
 
-        // Hapus centang untuk node yang SOS-nya sudah mati
+        // Hapus centang untuk node yang SOS-nya sudah mati di server
         acknowledgedSos.current.forEach((id) => {
             if (!activeIds.has(id)) acknowledgedSos.current.delete(id);
         });
@@ -64,7 +64,7 @@ export default function Dashboard() {
                 setError(null);
             } catch (err) {
                 if (cancelled) return;
-                setError(err.message); // data lama tetap tampil, hanya banner error muncul
+                setError(err.message);
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -78,6 +78,19 @@ export default function Dashboard() {
             clearInterval(timer);
         };
     }, []);
+
+    // Fungsi saat petugas menekan tombol "Selesaikan Penanganan" pada kartu
+    const handleResolveSos = async (node) => {
+    if (!window.confirm(`Selesaikan SOS ${node.name}? Pastikan pendaki sudah aman.`)) return;
+    try {
+        await resolveSos(node.dbId);
+        // Tampilan langsung berubah; polling berikutnya mengonfirmasi dari server
+        setNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, isSos: false } : n)));
+        if (sosAlert && sosAlert.id === node.id) setSosAlert(null);
+    } catch (err) {
+        window.alert(`Gagal menyelesaikan SOS: ${err.message}`);
+    }
+    };
 
     return (
         <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
@@ -121,7 +134,7 @@ export default function Dashboard() {
                             scrollWheelZoom={true} 
                             className="h-full w-full absolute inset-0 rounded-b-2xl"
                         >
-                        <MapResizeHandler />
+                            <MapResizeHandler />
                             <TileLayer
                                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -221,6 +234,16 @@ export default function Dashboard() {
                                             ></div>
                                         </div>
                                     </div>
+
+                                    {/* Tombol Matikan Notifikasi Merah / Selesaikan Penanganan */}
+                                    {node.isSos && (
+                                        <button
+                                            onClick={() => handleResolveSos(node)}
+                                            className="mt-3.5 w-full bg-red-600 hover:bg-red-700 text-white font-mono font-bold py-2 rounded-lg text-xs transition-all shadow-md active:scale-95 flex items-center justify-center gap-1"
+                                        >
+                                            SELESAIKAN PENANGANAN
+                                        </button>
+                                    )}
                                 </div>
                             );
                         })}
@@ -228,7 +251,7 @@ export default function Dashboard() {
                 </section>
             </main>
 
-            {/* High Priority Pure Red SOS Pop-Up Modal Alert */}
+            {/* High Priority Pure Red SOS Pop-Up Modal Alert (Tombol Simpel OK) */}
             {sosAlert && (
                 <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
                     <div className="bg-red-600 border-4 border-red-700 rounded-2xl max-w-sm w-full p-6 shadow-2xl text-white text-center font-sans">
@@ -263,5 +286,3 @@ export default function Dashboard() {
         </div>
     );
 }
-
-
