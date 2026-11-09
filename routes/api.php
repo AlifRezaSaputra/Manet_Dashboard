@@ -59,6 +59,65 @@ Route::get('/dashboard/nodes/{id}', function ($id) {
     ]);
 });
 
+Route::post('/dashboard/nodes/{id}/resolve', function ($id) {
+
+    $node = DB::table('node')->where('id', $id)->first();
+
+    if (!$node) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Node not found'
+        ], 404);
+    }
+
+    $resolved = DB::transaction(function () use ($node) {
+
+        // Matikan hanya kalau memang sedang aktif
+        $affected = DB::table('sos')
+            ->where('node_id', $node->id)
+            ->where('is_active', 1)
+            ->update([
+                'is_active'   => 0,
+                'resolved_at' => now(),
+                'updated_at'  => now()
+            ]);
+
+        if ($affected === 0) {
+            return false;
+        }
+
+        $location = DB::table('location')
+            ->where('node_id', $node->id)
+            ->orderByDesc('recorded_at')
+            ->first();
+
+        DB::table('sos_record')->insert([
+            'node_id'    => $node->id,
+            'event_type' => 'SOS_RESOLVED',
+            'event_time' => now(),
+            'latitude'   => $location?->latitude,
+            'longitude'  => $location?->longitude,
+            'payload'    => json_encode(['resolved_by' => 'dashboard']),
+            'created_at' => now(),
+            'updated_at' => now()
+        ]);
+
+        return true;
+    });
+
+    if (!$resolved) {
+        return response()->json([
+            'success' => false,
+            'message' => 'No active SOS for this node'
+        ], 409);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'SOS resolved'
+    ]);
+});
+
 /*
 |--------------------------------------------------------------------------
 | Telemetry API
