@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import { fetchDashboardNodes, resolveSos } from './api';
 
-const DEFAULT_CENTER = [-6.235045, 106.871906]; 
+const DEFAULT_CENTER = [-6.372108269939045, 106.82424173608405]; 
 
 // Komponen penyesuai ukuran kanvas Leaflet secara otomatis saat dimuat
 function MapResizeHandler() {
