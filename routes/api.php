@@ -211,29 +211,47 @@ Route::post('/telemetry', function (Request $request) {
 
     if (!empty($data['sos'])) {
 
-        DB::table('sos')->updateOrInsert(
-            ['node_id' => $node->id],
-            [
-                'is_active'    => true,
-                'triggered_at' => now(),
-                'resolved_at'  => null,
-                'created_at'   => now(),
-                'updated_at'   => now()
-            ]
-        );
+        DB::transaction(function () use ($node, $data) {
 
+            $current = DB::table('sos')
+                ->where('node_id', $node->id)
+                ->lockForUpdate()
+                ->first();
 
-        // Save permanent SOS record
-        DB::table('sos_record')->insert([
-            'node_id'    => $node->id,
-            'event_type' => 'SOS_TRIGGERED',
-            'event_time' => now(),
-            'latitude'   => $data['latitude'],
-            'longitude'  => $data['longitude'],
-            'payload'    => json_encode($data),
-            'created_at' => now(),
-            'updated_at' => now()
-        ]);
+            // Sudah aktif: bukan kejadian baru, jangan catat ulang
+            if ($current && $current->is_active) {
+                return;
+            }
+
+            if ($current) {
+                DB::table('sos')->where('node_id', $node->id)->update([
+                    'is_active'    => 1,
+                    'triggered_at' => now(),
+                    'resolved_at'  => null,
+                    'updated_at'   => now()
+                ]);
+            } else {
+                DB::table('sos')->insert([
+                    'node_id'      => $node->id,
+                    'is_active'    => 1,
+                    'triggered_at' => now(),
+                    'resolved_at'  => null,
+                    'created_at'   => now(),
+                    'updated_at'   => now()
+                ]);
+            }
+
+            DB::table('sos_record')->insert([
+                'node_id'    => $node->id,
+                'event_type' => 'SOS_TRIGGERED',
+                'event_time' => now(),
+                'latitude'   => $data['latitude'],
+                'longitude'  => $data['longitude'],
+                'payload'    => json_encode($data),
+                'created_at' => now(),
+                'updated_at' => now()
+            ]);
+        });
     }
 
 
@@ -242,4 +260,35 @@ Route::post('/telemetry', function (Request $request) {
         'message' => 'Telemetry received successfully'
     ], 201);
 
+});
+
+Route::get('/dashboard/sos-history', function (Request $request) {
+
+    $order = $request->query('order') === 'asc' ? 'asc' : 'desc'; // default terbaru dulu
+
+    $query = DB::table('sos_record')
+        ->join('node', 'node.id', '=', 'sos_record.node_id')
+        ->select(
+            'sos_record.id',
+            'sos_record.event_type',
+            'sos_record.event_time',
+            'sos_record.latitude',
+            'sos_record.longitude',
+            'sos_record.payload',
+            'node.id as node_db_id',
+            'node.node_id as node_code',
+            'node.node_name'
+        );
+
+    if ($request->filled('node')) {
+        $query->where('sos_record.node_id', (int) $request->query('node'));
+    }
+
+    $rows = $query
+        ->orderBy('sos_record.event_time', $order)
+        ->orderBy('sos_record.id', $order)   // pemecah seri kalau waktunya sama
+        ->limit(500)
+        ->get();
+
+    return response()->json(['success' => true, 'data' => $rows]);
 });

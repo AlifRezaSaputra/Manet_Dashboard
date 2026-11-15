@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import { fetchDashboardNodes, resolveSos } from './api';
+import SosHistory from './SosHistory';
 
 const DEFAULT_CENTER = [-6.372108269939045, 106.82424173608405]; 
 
@@ -31,6 +32,7 @@ export default function Dashboard() {
     const [nodes, setNodes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [view, setView] = useState('monitor'); // 'monitor' | 'history'
 
     const [sosAlert, setSosAlert] = useState(null);
     const acknowledgedSos = useRef(new Set()); // "daftar centang" modal popup
@@ -99,6 +101,21 @@ export default function Dashboard() {
                 <h1 className="text-xl font-black tracking-wider text-white uppercase font-mono">
                     BASECAMP PENDAKIAN PUNCAK WANGU
                 </h1>
+                <nav className="ml-8 flex gap-2">
+                    {[['monitor', 'MONITORING'], ['history', 'RIWAYAT SOS']].map(([key, label]) => (
+                        <button
+                            key={key}
+                            onClick={() => setView(key)}
+                            className={`px-4 py-1.5 rounded-lg text-xs font-mono font-bold tracking-wider transition-all ${
+                                view === key
+                                    ? 'bg-cyan-500 text-white'
+                                    : 'text-slate-300 hover:bg-slate-800'
+                            }`}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                </nav>
             </header>
 
             {error && (
@@ -113,143 +130,147 @@ export default function Dashboard() {
             )}
 
             {/* Main Operational Grid */}
-            <main className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 bg-slate-100/70">
-                
-                {/* Left/Center Panel: Map Visualization */}
-                <section className="lg:col-span-3 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm flex flex-col min-h-[550px]">
-                    <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex justify-start items-center">
-                        <h2 className="font-mono font-bold text-xs uppercase text-slate-700 tracking-wider">
-                            PETA LOKASI PENDAKI
-                        </h2>
-                    </div>
+            {view === 'history' ? (
+            <SosHistory nodes={nodes} />
+            ) : (
+                <main className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 bg-slate-100/70">
                     
-                    <div className="flex-1 relative z-0 w-full h-[500px]">
-                        <MapContainer 
-                            center={DEFAULT_CENTER} 
-                            zoom={14} 
-                            minZoom={10}
-                            maxZoom={18}
-                            maxBounds={[[-90, -180], [90, 180]]}
-                            maxBoundsViscosity={1.0}
-                            scrollWheelZoom={true} 
-                            className="h-full w-full absolute inset-0 rounded-b-2xl"
-                        >
-                            <MapResizeHandler />
-                            <TileLayer
-                                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                                noWrap={true}
-                            />
-                            {nodes.filter((node) => node.hasLocation).map((node) => (
-                                <Marker key={node.id} position={[node.lat, node.lng]}>
-                                    <Popup>
-                                        <div className="p-1 font-sans">
-                                            <div className="flex items-center justify-between gap-2">
-                                                <h3 className="font-bold text-slate-900 text-sm">{node.name}</h3>
-                                                {node.isSos && (
-                                                    <span className="bg-red-600 text-white text-[9px] font-mono px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
-                                                        SOS AKTIF
+                    {/* Left/Center Panel: Map Visualization */}
+                    <section className="lg:col-span-3 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm flex flex-col min-h-[550px]">
+                        <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex justify-start items-center">
+                            <h2 className="font-mono font-bold text-xs uppercase text-slate-700 tracking-wider">
+                                PETA LOKASI PENDAKI
+                            </h2>
+                        </div>
+                        
+                        <div className="flex-1 relative z-0 w-full h-[500px]">
+                            <MapContainer 
+                                center={DEFAULT_CENTER} 
+                                zoom={14} 
+                                minZoom={10}
+                                maxZoom={18}
+                                maxBounds={[[-90, -180], [90, 180]]}
+                                maxBoundsViscosity={1.0}
+                                scrollWheelZoom={true} 
+                                className="h-full w-full absolute inset-0 rounded-b-2xl"
+                            >
+                                <MapResizeHandler />
+                                <TileLayer
+                                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                                    noWrap={true}
+                                />
+                                {nodes.filter((node) => node.hasLocation).map((node) => (
+                                    <Marker key={node.id} position={[node.lat, node.lng]}>
+                                        <Popup>
+                                            <div className="p-1 font-sans">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <h3 className="font-bold text-slate-900 text-sm">{node.name}</h3>
+                                                    {node.isSos && (
+                                                        <span className="bg-red-600 text-white text-[9px] font-mono px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
+                                                            SOS AKTIF
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-slate-500 font-mono">ID: {node.id}</p>
+                                                <div className="mt-2 text-xs flex justify-between gap-4 font-semibold">
+                                                    <span>Baterai:</span>
+                                                    <span className={node.isSos ? 'text-red-600 font-bold' : node.battery > 50 ? 'text-emerald-600' : 'text-amber-600'}>
+                                                        {node.battery !== null ? `${node.battery}%` : 'TIDAK ADA DATA'}
                                                     </span>
-                                                )}
+                                                </div>
                                             </div>
-                                            <p className="text-xs text-slate-500 font-mono">ID: {node.id}</p>
-                                            <div className="mt-2 text-xs flex justify-between gap-4 font-semibold">
-                                                <span>Baterai:</span>
-                                                <span className={node.isSos ? 'text-red-600 font-bold' : node.battery > 50 ? 'text-emerald-600' : 'text-amber-600'}>
+                                        </Popup>
+                                    </Marker>
+                                ))}
+                            </MapContainer>
+                        </div>
+                    </section>
+
+                    {/* Right Panel: Status Pendaki & Jam Real-Time */}
+                    <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col">
+                        <div className="flex flex-col items-center justify-center mb-4 border-b border-slate-200 pb-3">
+                            <h2 className="font-mono font-bold text-sm uppercase text-slate-700 tracking-wider text-center">
+                                STATUS PENDAKI
+                            </h2>
+                            <div className="mt-1 font-mono text-xs font-semibold text-cyan-600 bg-cyan-50 px-3 py-1 rounded-full border border-cyan-200 shadow-sm flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse"></span>
+                                <span>{currentTime} WIB</span>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3.5 flex-1 overflow-y-auto">
+                            {nodes.map((node) => {
+                                const isMoreThan50 = node.battery > 50;
+
+                                const batteryTheme = node.isSos
+                                    ? {
+                                        bg: 'bg-red-500',
+                                        text: 'text-red-600',
+                                        cardBg: 'bg-red-100/70 border-red-500 ring-2 ring-red-500/40 shadow-red-200'
+                                    }
+                                    : isMoreThan50
+                                    ? {
+                                        bg: 'bg-emerald-500',
+                                        text: 'text-emerald-600',
+                                        cardBg: 'bg-emerald-50/60 border-emerald-200'
+                                    }
+                                    : {
+                                        bg: 'bg-amber-400',
+                                        text: 'text-amber-600',
+                                        cardBg: 'bg-amber-50/60 border-amber-200'
+                                    };
+
+                                return (
+                                    <div 
+                                        key={node.id}
+                                        className={`p-4 rounded-xl border transition-all duration-300 relative overflow-hidden shadow-sm ${batteryTheme.cardBg}`}
+                                    >
+                                        {node.isSos && (
+                                            <div className="absolute top-0 right-0 bg-red-600 text-[10px] font-mono font-black text-white px-2.5 py-0.5 rounded-bl-lg uppercase tracking-wider shadow-sm">
+                                                SOS AKTIF
+                                            </div>
+                                        )}
+
+                                        <div className="flex items-start justify-between mb-2">
+                                            <div>
+                                                <h4 className="font-bold text-sm text-slate-800">{node.name}</h4>
+                                                <p className="text-[11px] font-mono text-slate-500">{node.id}</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2 mt-3">
+                                            <div className="flex items-center justify-between text-xs font-mono">
+                                                <span className="text-slate-500 font-medium">ENERGY LEVEL</span>
+                                                <span className={`font-bold ${batteryTheme.text}`}>
                                                     {node.battery !== null ? `${node.battery}%` : 'TIDAK ADA DATA'}
                                                 </span>
                                             </div>
-                                        </div>
-                                    </Popup>
-                                </Marker>
-                            ))}
-                        </MapContainer>
-                    </div>
-                </section>
 
-                {/* Right Panel: Status Pendaki & Jam Real-Time */}
-                <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col">
-                    <div className="flex flex-col items-center justify-center mb-4 border-b border-slate-200 pb-3">
-                        <h2 className="font-mono font-bold text-sm uppercase text-slate-700 tracking-wider text-center">
-                            STATUS PENDAKI
-                        </h2>
-                        <div className="mt-1 font-mono text-xs font-semibold text-cyan-600 bg-cyan-50 px-3 py-1 rounded-full border border-cyan-200 shadow-sm flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse"></span>
-                            <span>{currentTime} WIB</span>
+                                            <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-300/60">
+                                                <div 
+                                                    className={`h-full rounded-full transition-all duration-500 ${batteryTheme.bg}`}
+                                                    style={{ width: `${node.battery ?? 0}%` }}
+                                                ></div>
+                                            </div>
+                                        </div>
+
+                                        {/* Tombol Matikan Notifikasi Merah / Selesaikan Penanganan */}
+                                        {node.isSos && (
+                                            <button
+                                                onClick={() => handleResolveSos(node)}
+                                                className="mt-3.5 w-full bg-red-600 hover:bg-red-700 text-white font-mono font-bold py-2 rounded-lg text-xs transition-all shadow-md active:scale-95 flex items-center justify-center gap-1"
+                                            >
+                                                SELESAIKAN PENANGANAN
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })}
                         </div>
-                    </div>
-
-                    <div className="space-y-3.5 flex-1 overflow-y-auto">
-                        {nodes.map((node) => {
-                            const isMoreThan50 = node.battery > 50;
-
-                            const batteryTheme = node.isSos
-                                ? {
-                                      bg: 'bg-red-500',
-                                      text: 'text-red-600',
-                                      cardBg: 'bg-red-100/70 border-red-500 ring-2 ring-red-500/40 shadow-red-200'
-                                  }
-                                : isMoreThan50
-                                ? {
-                                      bg: 'bg-emerald-500',
-                                      text: 'text-emerald-600',
-                                      cardBg: 'bg-emerald-50/60 border-emerald-200'
-                                  }
-                                : {
-                                      bg: 'bg-amber-400',
-                                      text: 'text-amber-600',
-                                      cardBg: 'bg-amber-50/60 border-amber-200'
-                                  };
-
-                            return (
-                                <div 
-                                    key={node.id}
-                                    className={`p-4 rounded-xl border transition-all duration-300 relative overflow-hidden shadow-sm ${batteryTheme.cardBg}`}
-                                >
-                                    {node.isSos && (
-                                        <div className="absolute top-0 right-0 bg-red-600 text-[10px] font-mono font-black text-white px-2.5 py-0.5 rounded-bl-lg uppercase tracking-wider shadow-sm">
-                                            SOS AKTIF
-                                        </div>
-                                    )}
-
-                                    <div className="flex items-start justify-between mb-2">
-                                        <div>
-                                            <h4 className="font-bold text-sm text-slate-800">{node.name}</h4>
-                                            <p className="text-[11px] font-mono text-slate-500">{node.id}</p>
-                                        </div>
-                                    </div>
-
-                                    <div className="space-y-2 mt-3">
-                                        <div className="flex items-center justify-between text-xs font-mono">
-                                            <span className="text-slate-500 font-medium">ENERGY LEVEL</span>
-                                            <span className={`font-bold ${batteryTheme.text}`}>
-                                                {node.battery !== null ? `${node.battery}%` : 'TIDAK ADA DATA'}
-                                            </span>
-                                        </div>
-
-                                        <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-300/60">
-                                            <div 
-                                                className={`h-full rounded-full transition-all duration-500 ${batteryTheme.bg}`}
-                                                style={{ width: `${node.battery ?? 0}%` }}
-                                            ></div>
-                                        </div>
-                                    </div>
-
-                                    {/* Tombol Matikan Notifikasi Merah / Selesaikan Penanganan */}
-                                    {node.isSos && (
-                                        <button
-                                            onClick={() => handleResolveSos(node)}
-                                            className="mt-3.5 w-full bg-red-600 hover:bg-red-700 text-white font-mono font-bold py-2 rounded-lg text-xs transition-all shadow-md active:scale-95 flex items-center justify-center gap-1"
-                                        >
-                                            SELESAIKAN PENANGANAN
-                                        </button>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                </section>
-            </main>
+                    </section>
+                </main>
+            )}
 
             {/* High Priority Pure Red SOS Pop-Up Modal Alert (Tombol Simpel OK) */}
             {sosAlert && (

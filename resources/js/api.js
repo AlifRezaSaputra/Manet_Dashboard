@@ -76,3 +76,10 @@ export async function resolveSos(dbId) {
     // 409 = sudah tidak ada SOS aktif (misalnya sudah ditutup operator lain): anggap beres
     if (!res.ok && res.status !== 409) throw new Error(`HTTP ${res.status}`);
 }
+
+export async function fetchSosHistory({ order = 'desc', node = '' } = {}) {
+    const params = new URLSearchParams({ order });
+    if (node) params.set('node', node);
+    const json = await getJson(`${API_BASE}/sos-history?${params}`);
+    return json.data;
+}
