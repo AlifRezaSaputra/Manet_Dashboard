@@ -4,6 +4,37 @@
 
 const API_BASE = '/api/dashboard';
 
+let authToken = null; // Token hanya di memori: hilang saat refresh/tutup tab (sesuai spesifikasi)
+let onUnauthorized = () => {};
+
+export function setUnauthorizedHandler(fn) {
+    onUnauthorized = fn;
+}
+
+export function logout() {
+    authToken = null;
+}
+
+export async function login(password) {
+    const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ password }),
+    });
+    const json = await res.json().catch(() => ({}));
+
+    if (res.status === 401) throw new Error('Password salah');
+    if (res.status === 429) throw new Error('Terlalu banyak percobaan. Tunggu sebentar lalu coba lagi.');
+    if (res.status === 503) throw new Error('Login belum dikonfigurasi di server');
+    if (!res.ok || !json.token) throw new Error(`Gagal login (HTTP ${res.status})`);
+
+    authToken = json.token;
+}
+
+function authHeaders(extra = {}) {
+    return { Accept: 'application/json', ...extra, Authorization: `Bearer ${authToken}` };
+}
+
 // Ubah string/angka menjadi angka, atau null kalau tidak valid.
 // Penting: 0 tetap 0, bukan null.
 function toNumber(value) {
@@ -44,7 +75,12 @@ export function mapNode(listItem, detail) {
 }
 
 async function getJson(url) {
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    const res = await fetch(url, { headers: authHeaders() });
+    if (res.status === 401) {
+        authToken = null;
+        onUnauthorized();
+        throw new Error('Sesi berakhir');
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status} untuk ${url}`);
     return res.json();
 }
@@ -71,9 +107,14 @@ export async function fetchDashboardNodes() {
 export async function resolveSos(dbId) {
     const res = await fetch(`${API_BASE}/nodes/${dbId}/resolve`, {
         method: 'POST',
-        headers: { Accept: 'application/json' },
+        headers: authHeaders(),
     });
-    // 409 = sudah tidak ada SOS aktif (misalnya sudah ditutup operator lain): anggap beres
+    if (res.status === 401) {
+        authToken = null;
+        onUnauthorized();
+        throw new Error('Sesi berakhir');
+    }
+    // 409 = sudah tidak ada SOS aktif: anggap beres
     if (!res.ok && res.status !== 409) throw new Error(`HTTP ${res.status}`);
 }
 

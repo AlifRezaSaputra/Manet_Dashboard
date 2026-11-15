@@ -2,7 +2,7 @@ import 'leaflet/dist/leaflet.css';
 
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import Dashboard from './Dashboard';
+import AuthGate from './AuthGate';
 
 const rootElement = document.getElementById('app');
 
@@ -10,7 +10,7 @@ if (rootElement) {
     const root = createRoot(rootElement);
     root.render(
         <React.StrictMode>
-            <Dashboard />
+            <AuthGate />
         </React.StrictMode>
     );
 }
