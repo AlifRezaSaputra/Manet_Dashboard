@@ -129,6 +129,75 @@ class QosCalculationService
             ]
             : $na('hops', 'Tidak ada hop_count pada paket yang terkirim.', $base);
 
+                    // --- RSSI / SNR (hanya RX di tujuan dengan radio metrics valid) ---
+        $radio = QosEvent::where('qos_test_id', $test->id)
+            ->where('event_type', 'PACKET_RX')
+            ->where('node_id', $dest)
+            ->where('has_radio_metrics', true)
+            ->get(['rssi', 'snr']);
+
+        $radioNote = 'Hanya event RX di node tujuan. Event relay belum diekspor ke collector.';
+        foreach (['rssi' => ['dBm', 'rssi'], 'snr' => ['dB', 'snr']] as $name => [$unit, $col]) {
+            $vals = $radio->pluck($col)->filter(fn ($v) => $v !== null)->values();
+            if ($vals->count() > 0) {
+                $meta = ['note' => $radioNote];
+                $results["avg_{$name}"] = ['value' => $vals->avg(), 'unit' => $unit, 'samples' => $vals->count(), 'metadata' => $meta];
+                $results["min_{$name}"] = ['value' => $vals->min(), 'unit' => $unit, 'samples' => $vals->count(), 'metadata' => $meta];
+                $results["max_{$name}"] = ['value' => $vals->max(), 'unit' => $unit, 'samples' => $vals->count(), 'metadata' => $meta];
+            } else {
+                foreach (['avg', 'min', 'max'] as $p) {
+                    $results["{$p}_{$name}"] = $na($unit, 'Tidak ada event RX dengan radio metrics valid.');
+                }
+            }
+        }
+
+        // --- Throughput aplikasi ---
+        $payloadBytes = QosEvent::where('qos_test_id', $test->id)
+            ->where('event_type', 'PACKET_RX')->where('packet_type', 'DATA')
+            ->where('node_id', $dest)->where('source_id', $source)
+            ->whereNotNull('boot_id')->whereNotNull('sequence_number')
+            ->whereNotNull('payload_length')
+            ->orderBy('id')
+            ->get(['boot_id', 'sequence_number', 'payload_length'])
+            ->unique(fn ($e) => $e->boot_id . '|' . $e->sequence_number)
+            ->sum('payload_length');
+
+        $duration = $test->duration_seconds;
+        $tpMeta = [
+            'duration_seconds' => $duration,
+            'delivered_payload_bytes' => (int) $payloadBytes,
+            'note' => 'Throughput aplikasi (payload terkirim / durasi rekaman), bukan bit rate PHY LoRa.',
+        ];
+        $results['throughput'] = ($duration && $duration > 0 && $payloadBytes > 0)
+            ? ['value' => $payloadBytes * 8 / $duration, 'unit' => 'bps', 'samples' => $deliveredCount, 'metadata' => $tpMeta]
+            : $na('bps', 'Durasi rekaman atau payload_length terkirim tidak tersedia.', $tpMeta);
+
+        // --- Hitungan event ---
+        $count = fn ($q) => $q->count();
+        $evt = fn () => QosEvent::where('qos_test_id', $test->id);
+
+        $results['data_tx_count'] = [
+            'value' => $evt()->where('event_type', 'PACKET_TX')->where('packet_type', 'DATA')->count(),
+            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'Hanya event TX yang sampai ke collector.'],
+        ];
+        $results['data_rx_count'] = [
+            'value' => $evt()->where('event_type', 'PACKET_RX')->where('packet_type', 'DATA')->count(),
+            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'Semua event RX DATA yang tercatat, termasuk duplikat.'],
+        ];
+        $results['forwarding_count'] = [
+            'value' => $evt()->where('event_type', 'PACKET_TX')->where('packet_type', 'DATA')->where('node_id', '!=', $source)->count(),
+            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'TX DATA oleh node selain sumber. 0 bisa berarti relay belum mengekspor event.'],
+        ];
+        $results['duplicate_count'] = [
+            'value' => $base['duplicate_rx_events'],
+            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'Event RX DATA di tujuan dengan identitas paket yang sama.'],
+        ];
+        $results['dropped_count'] = [
+            'value' => $evt()->where(fn ($q) => $q->where('event_status', 'failed')->orWhereNotNull('drop_reason'))->count(),
+            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'Event dengan status failed atau drop_reason terisi.'],
+        ];
+        $results['retransmission_count'] = $na('events', 'Firmware belum menyediakan penanda retransmisi pada event.');
+        
         return $results;
     }
 }

@@ -118,4 +118,75 @@ class QosCalculationTest extends TestCase
 
         $this->assertSame($count, QosResult::where('qos_test_id', $t->id)->count());
     }
+
+        public function test_radio_stats_use_only_valid_rx_at_destination(): void
+    {
+        $t = $this->makeSession();
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 1, ['has_radio_metrics' => true, 'rssi' => -80, 'snr' => 6]);
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 2, ['has_radio_metrics' => true, 'rssi' => -90, 'snr' => 8]);
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 3, ['has_radio_metrics' => false, 'rssi' => null, 'snr' => null]);
+        $this->ev($t, 'NODE02', 'PACKET_RX', 'DATA', 4, ['has_radio_metrics' => true, 'rssi' => -10, 'snr' => 1]);
+
+        (new QosCalculationService)->calculate($t);
+
+        $this->assertEqualsWithDelta(-85.0, $this->metric($t, 'avg_rssi')->metric_value, 0.0001);
+        $this->assertEquals(-90, $this->metric($t, 'min_rssi')->metric_value);
+        $this->assertEquals(-80, $this->metric($t, 'max_rssi')->metric_value);
+        $this->assertEqualsWithDelta(7.0, $this->metric($t, 'avg_snr')->metric_value, 0.0001);
+        $this->assertSame(2, (int) $this->metric($t, 'avg_rssi')->sample_count);
+    }
+
+    public function test_radio_stats_are_na_without_valid_samples(): void
+    {
+        $t = $this->makeSession();
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 1, ['has_radio_metrics' => false]);
+
+        (new QosCalculationService)->calculate($t);
+
+        $this->assertNull($this->metric($t, 'avg_rssi')->metric_value);
+        $this->assertNull($this->metric($t, 'min_snr')->metric_value);
+    }
+
+    public function test_throughput_counts_unique_delivered_payload(): void
+    {
+        $t = $this->makeSession();
+        $t->update(['duration_seconds' => 10]);
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 1, ['payload_length' => 20]);
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 1, ['payload_length' => 20]); // duplikat
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 2, ['payload_length' => 30]);
+
+        (new QosCalculationService)->calculate($t->fresh());
+
+        // (20 + 30) * 8 / 10 = 40 bps
+        $this->assertEqualsWithDelta(40.0, $this->metric($t, 'throughput')->metric_value, 0.0001);
+    }
+
+    public function test_throughput_is_na_without_duration_and_retransmission_is_na(): void
+    {
+        $t = $this->makeSession();
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 1, ['payload_length' => 20]);
+
+        (new QosCalculationService)->calculate($t);
+
+        $this->assertNull($this->metric($t, 'throughput')->metric_value);
+        $this->assertNull($this->metric($t, 'retransmission_count')->metric_value);
+    }
+
+    public function test_event_counts(): void
+    {
+        $t = $this->makeSession();
+        $this->ev($t, 'NODE01', 'PACKET_TX', 'DATA', 1);
+        $this->ev($t, 'NODE02', 'PACKET_TX', 'DATA', 1);                 // forwarding
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 1);
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 1);                   // duplikat
+        $this->ev($t, 'NODE01', 'PACKET_TX', 'DATA', 2, ['event_status' => 'failed', 'drop_reason' => 'timeout']);
+
+        (new QosCalculationService)->calculate($t);
+
+        $this->assertEquals(3, $this->metric($t, 'data_tx_count')->metric_value);
+        $this->assertEquals(2, $this->metric($t, 'data_rx_count')->metric_value);
+        $this->assertEquals(1, $this->metric($t, 'forwarding_count')->metric_value);
+        $this->assertEquals(1, $this->metric($t, 'duplicate_count')->metric_value);
+        $this->assertEquals(1, $this->metric($t, 'dropped_count')->metric_value);
+    }
 }
