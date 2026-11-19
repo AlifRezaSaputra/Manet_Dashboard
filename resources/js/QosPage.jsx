@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { fetchQosTests } from './api';
 import QosCreateForm from './QosCreateForm';
+import QosRecordPage from './QosRecordPage';
 
 const TOPOLOGY_LABEL = {
     direct: 'Direct',
@@ -50,6 +51,7 @@ export default function QosPage({ nodes = [] }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [reloadKey, setReloadKey] = useState(0);
+    const [openId, setOpenId] = useState(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -71,6 +73,15 @@ export default function QosPage({ nodes = [] }) {
             byTopology,
         };
     }, [tests]);
+
+    if (openId !== null) {
+    return (
+        <QosRecordPage
+            testId={openId}
+            onBack={() => { setOpenId(null); setReloadKey((k) => k + 1); }}
+        />
+    );
+    }
 
     if (creating) {
         return (
@@ -151,7 +162,7 @@ export default function QosPage({ nodes = [] }) {
                             </thead>
                             <tbody>
                                 {tests.map((t) => (
-                                    <tr key={t.id} className="border-b border-slate-100 hover:bg-slate-50">
+                                    <tr key={t.id} className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer">
                                         <td className="px-4 py-3 font-bold text-slate-800 whitespace-nowrap">{t.test_code}</td>
                                         <td className="px-4 py-3">{t.name}</td>
                                         <td className="px-4 py-3 whitespace-nowrap">{TOPOLOGY_LABEL[t.topology_type] ?? t.topology_type}</td>
