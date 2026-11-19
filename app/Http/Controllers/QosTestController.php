@@ -91,27 +91,78 @@ class QosTestController extends Controller
         });
     }
 
-    public function stop($id)
+    public function stop($id, \App\Services\QosCalculationService $calculator)
     {
-        return DB::transaction(function () use ($id) {
+        $test = DB::transaction(function () use ($id) {
             $test = QosTest::lockForUpdate()->find($id);
 
             if (!$test) {
-                return response()->json(['success' => false, 'message' => 'Test not found'], 404);
+                return null;
             }
 
             if ($test->status !== 'recording') {
-                return response()->json(['success' => false, 'message' => 'Hanya sesi recording yang bisa dihentikan'], 409);
+                return false;
             }
 
             $ended = now();
+
             $test->update([
-                'status'           => 'completed',
-                'ended_at'         => $ended,
+                'status' => 'completed',
+                'ended_at' => $ended,
                 'duration_seconds' => $test->started_at->diffInSeconds($ended),
             ]);
 
-            return response()->json(['success' => true, 'data' => $test->fresh('nodes')]);
+            return $test->fresh('nodes');
         });
+
+        if ($test === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Test not found',
+            ], 404);
+        }
+
+        if ($test === false) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Hanya sesi recording yang bisa dihentikan',
+            ], 409);
+        }
+
+        $calculator->calculate($test);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Test stopped and QoS calculated successfully',
+            'data' => $test,
+        ]);
+    }
+
+    public function active()
+    {
+        $test = QosTest::with('nodes')
+            ->where('status', 'recording')
+            ->latest('started_at')
+            ->first();
+
+        if (!$test) {
+            return response()->json([
+                'success' => true,
+                'active' => false,
+                'data' => null,
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'active' => true,
+            'data' => [
+                'id' => $test->id,
+                'test_code' => $test->test_code,
+                'status' => $test->status,
+                'source_node_id' => $test->source_node_id,
+                'destination_node_id' => $test->destination_node_id,
+            ],
+        ]);
     }
 }
