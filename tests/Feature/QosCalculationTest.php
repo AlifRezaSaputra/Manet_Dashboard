@@ -8,6 +8,7 @@ use App\Models\QosTest;
 use App\Services\QosCalculationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
+use App\Services\QosAirtimeCalculator;
 
 class QosCalculationTest extends TestCase
 {
@@ -188,5 +189,54 @@ class QosCalculationTest extends TestCase
         $this->assertEquals(1, $this->metric($t, 'forwarding_count')->metric_value);
         $this->assertEquals(1, $this->metric($t, 'duplicate_count')->metric_value);
         $this->assertEquals(1, $this->metric($t, 'dropped_count')->metric_value);
+    }
+
+        public function test_airtime_matches_semtech_reference(): void
+    {
+        $cfg = QosAirtimeCalculator::config(['sf' => 7, 'bw' => 125, 'cr' => 5, 'preamble' => 8]);
+        // 20 byte, SF7, BW125, CR4/5, header eksplisit, CRC aktif = 56.576 ms
+        $this->assertEqualsWithDelta(56.576, QosAirtimeCalculator::packetSeconds(20, $cfg) * 1000, 0.001);
+    }
+
+    public function test_airtime_config_incomplete_returns_null(): void
+    {
+        $this->assertNull(QosAirtimeCalculator::config(['sf' => 7]));
+        $this->assertNull(QosAirtimeCalculator::config(null));
+    }
+
+    public function test_overhead_and_airtime_from_tx_events(): void
+    {
+        $t = $this->makeSession();
+        $t->update(['radio_config' => ['sf' => 7, 'bw' => 125, 'cr' => 5, 'preamble' => 8]]);
+        $this->ev($t, 'NODE01', 'PACKET_TX', 'DATA', 1, ['payload_length' => 20]);
+        $this->ev($t, 'NODE02', 'PACKET_TX', 'DATA', 1, ['payload_length' => 20]);
+        $this->ev($t, 'NODE01', 'PACKET_TX', 'HELLO', null, ['payload_length' => 10]);
+        $this->ev($t, 'BASE', 'PACKET_TX', 'ACK', null, ['payload_length' => 5]);
+
+        (new QosCalculationService)->calculate($t->fresh());
+
+        $this->assertEquals(2, $this->metric($t, 'control_packet_count')->metric_value);
+        $this->assertEquals(15, $this->metric($t, 'control_packet_bytes')->metric_value);
+        $this->assertEqualsWithDelta(1.0, $this->metric($t, 'control_to_data_packet_ratio')->metric_value, 0.0001);
+        $this->assertEqualsWithDelta(15 / 40, $this->metric($t, 'control_to_data_byte_ratio')->metric_value, 0.0001);
+
+        $dataMs = 2 * 56.576;
+        $this->assertEqualsWithDelta($dataMs, $this->metric($t, 'airtime_data')->metric_value, 0.01);
+        $total = $this->metric($t, 'airtime_total');
+        $this->assertSame('theoretical', $total->metadata['kind']);
+        $this->assertSame(2, $total->metadata['by_node']['NODE01']['transmissions']);
+        $this->assertSame(1, $total->metadata['by_node']['BASE']['transmissions']);
+    }
+
+    public function test_airtime_is_na_without_radio_config_and_delay_is_always_na(): void
+    {
+        $t = $this->makeSession();
+        $this->ev($t, 'NODE01', 'PACKET_TX', 'DATA', 1, ['payload_length' => 20]);
+
+        (new QosCalculationService)->calculate($t);
+
+        $this->assertNull($this->metric($t, 'airtime_total')->metric_value);
+        $this->assertNull($this->metric($t, 'e2e_delay')->metric_value);
+        $this->assertEquals(0, $this->metric($t, 'control_packet_count')->metric_value);
     }
 }

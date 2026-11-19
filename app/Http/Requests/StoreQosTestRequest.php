@@ -29,6 +29,9 @@ class StoreQosTestRequest extends FormRequest
             'radio_config.cr'       => 'nullable|integer|between:5,8',
             'radio_config.preamble' => 'nullable|integer|min:0',
             'notes'                 => 'nullable|string',
+            'radio_config.explicit_header' => 'nullable|boolean',
+            'radio_config.crc'             => 'nullable|boolean',
+            'radio_config.ldro'            => 'nullable|boolean',
         ];
     }
 

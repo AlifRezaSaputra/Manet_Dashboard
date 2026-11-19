@@ -198,6 +198,99 @@ class QosCalculationService
         ];
         $results['retransmission_count'] = $na('events', 'Firmware belum menyediakan penanda retransmisi pada event.');
         
+                // --- Basis: TX bila ada (transmisi nyata), jika tidak RX (yang teramati) ---
+        $hasTx = QosEvent::where('qos_test_id', $test->id)->where('event_type', 'PACKET_TX')->exists();
+        $basis = $hasTx ? 'PACKET_TX' : 'PACKET_RX';
+        $basisNote = $hasTx
+            ? 'Dihitung dari event PACKET_TX yang sampai ke collector.'
+            : 'Tidak ada event TX; dihitung dari event PACKET_RX yang teramati. Nilai cenderung lebih rendah dari transmisi sebenarnya.';
+
+        $controlTypes = ['HELLO', 'RREQ', 'RREP', 'RERR', 'ACK'];
+        $basisEvents = QosEvent::where('qos_test_id', $test->id)
+            ->where('event_type', $basis)
+            ->get(['node_id', 'packet_type', 'payload_length']);
+
+        // --- Routing overhead ---
+        $ohMeta = [
+            'basis' => $basis,
+            'note' => $basisNote,
+            'control_types' => $controlTypes,
+        ];
+
+        if ($basisEvents->isEmpty()) {
+            foreach (['control_packet_count' => 'events', 'control_packet_bytes' => 'bytes',
+                      'control_to_data_packet_ratio' => 'ratio', 'control_to_data_byte_ratio' => 'ratio'] as $k => $u) {
+                $results[$k] = $na($u, 'Tidak ada event paket yang tercatat.', $ohMeta);
+            }
+        } else {
+            $ctrl = $basisEvents->whereIn('packet_type', $controlTypes);
+            $data = $basisEvents->where('packet_type', 'DATA');
+            $ctrlCount = $ctrl->count();
+            $dataCount = $data->count();
+            $ctrlWithLen = $ctrl->filter(fn ($e) => $e->payload_length !== null);
+            $dataWithLen = $data->filter(fn ($e) => $e->payload_length !== null);
+            $ctrlBytes = (int) $ctrlWithLen->sum('payload_length');
+            $dataBytes = (int) $dataWithLen->sum('payload_length');
+            $ohMeta += [
+                'control_events_without_payload_length' => $ctrlCount - $ctrlWithLen->count(),
+                'data_events_without_payload_length' => $dataCount - $dataWithLen->count(),
+            ];
+
+            $results['control_packet_count'] = ['value' => $ctrlCount, 'unit' => 'events', 'samples' => $ctrlCount, 'metadata' => $ohMeta];
+            $results['control_packet_bytes'] = ($ctrlCount === 0 || $ctrlWithLen->count() > 0)
+                ? ['value' => $ctrlBytes, 'unit' => 'bytes', 'samples' => $ctrlWithLen->count(), 'metadata' => $ohMeta]
+                : $na('bytes', 'Event kontrol tidak memiliki payload_length.', $ohMeta);
+            $results['control_to_data_packet_ratio'] = $dataCount > 0
+                ? ['value' => $ctrlCount / $dataCount, 'unit' => 'ratio', 'samples' => $dataCount, 'metadata' => $ohMeta]
+                : $na('ratio', 'Tidak ada paket DATA sebagai pembanding.', $ohMeta);
+            $results['control_to_data_byte_ratio'] = $dataBytes > 0 && ($ctrlCount === 0 || $ctrlWithLen->count() > 0)
+                ? ['value' => $ctrlBytes / $dataBytes, 'unit' => 'ratio', 'samples' => $dataWithLen->count(), 'metadata' => $ohMeta]
+                : $na('ratio', 'Byte DATA atau byte kontrol tidak tersedia.', $ohMeta);
+        }
+
+        // --- Airtime teoretis LoRa ---
+        $cfg = QosAirtimeCalculator::config($test->radio_config);
+        $airKeys = ['airtime_data' => 'ms', 'airtime_control' => 'ms', 'airtime_total' => 'ms', 'airtime_avg_per_tx' => 'ms'];
+
+        if ($cfg === null) {
+            $reason = 'Konfigurasi radio (SF, BW, CR, preamble) belum lengkap pada sesi ini.';
+            foreach ($airKeys as $k => $u) $results[$k] = $na($u, $reason);
+        } else {
+            $timed = $basisEvents->filter(fn ($e) => $e->payload_length !== null);
+            $airMeta = [
+                'kind' => 'theoretical',
+                'basis' => $basis,
+                'note' => $basisNote . ' Memakai payload_length sebagai ukuran payload yang dikirim radio; '
+                        . 'perlu dikonfirmasi firmware. Ini airtime teoretis, bukan durasi radio terukur.',
+                'radio' => $cfg,
+                'events_without_payload_length' => $basisEvents->count() - $timed->count(),
+            ];
+
+            if ($timed->isEmpty()) {
+                foreach ($airKeys as $k => $u) $results[$k] = $na($u, 'Tidak ada event dengan payload_length.', $airMeta);
+            } else {
+                $ms = fn ($e) => QosAirtimeCalculator::packetSeconds((int) $e->payload_length, $cfg) * 1000;
+                $dataMs = $timed->where('packet_type', 'DATA')->sum($ms);
+                $ctrlMs = $timed->whereIn('packet_type', $controlTypes)->sum($ms);
+                $totalMs = $dataMs + $ctrlMs;
+                $n = $timed->count();
+
+                $byNode = $timed->groupBy('node_id')->map(fn ($g) => [
+                    'airtime_ms' => round($g->sum($ms), 3),
+                    'transmissions' => $g->count(),
+                ])->all();
+
+                $results['airtime_data']       = ['value' => $dataMs, 'unit' => 'ms', 'samples' => $timed->where('packet_type', 'DATA')->count(), 'metadata' => $airMeta];
+                $results['airtime_control']    = ['value' => $ctrlMs, 'unit' => 'ms', 'samples' => $timed->whereIn('packet_type', $controlTypes)->count(), 'metadata' => $airMeta];
+                $results['airtime_total']      = ['value' => $totalMs, 'unit' => 'ms', 'samples' => $n, 'metadata' => $airMeta + ['by_node' => $byNode]];
+                $results['airtime_avg_per_tx'] = ['value' => $totalMs / $n, 'unit' => 'ms', 'samples' => $n, 'metadata' => $airMeta];
+            }
+        }
+
+        // E2E delay: jam millis() antar-ESP32 tidak sinkron
+        $results['e2e_delay'] = $na('ms', 'Tidak dihitung: jam millis() antar node tidak tersinkronisasi. '
+            . 'Selisih timestamp lintas node tidak valid tanpa metode sinkronisasi yang tervalidasi.');
+
         return $results;
     }
 }
