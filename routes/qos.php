@@ -22,4 +22,5 @@ Route::middleware([QosModuleEnabled::class])->group(function () {
     });
 
     Route::post('/qos/tests/{id}/events', [QosEventController::class, 'store']);
+    Route::get('/qos/active-test', [QosTestController::class, 'active']);
 });
