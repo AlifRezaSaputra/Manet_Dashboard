@@ -133,3 +133,8 @@ export async function fetchQosEnabled() {
         return false;
     }
 }
+
+export async function fetchQosTests() {
+    const json = await getJson('/api/qos/tests');
+    return json.data;
+}
