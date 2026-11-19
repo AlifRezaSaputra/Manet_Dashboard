@@ -4,6 +4,7 @@ use App\Http\Middleware\AdminAuth;
 use App\Http\Middleware\QosModuleEnabled;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\QosTestController;
+use App\Http\Controllers\QosEventController;
 
 Route::middleware([QosModuleEnabled::class])->group(function () {
 
@@ -18,4 +19,6 @@ Route::middleware([QosModuleEnabled::class])->group(function () {
         Route::post('/qos/tests/{id}/start', [QosTestController::class, 'start']);
         Route::post('/qos/tests/{id}/stop', [QosTestController::class, 'stop']);
     });
+
+    Route::post('/qos/tests/{id}/events', [QosEventController::class, 'store']);
 });
