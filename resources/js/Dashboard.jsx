@@ -1,11 +1,30 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import { fetchDashboardNodes, resolveSos } from './api';
+import { MapContainer, TileLayer, Marker, Popup, Tooltip, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import { fetchDashboardNodes, resolveSos, fetchQosEnabled } from './api';
 import SosHistory from './SosHistory';
-import { fetchQosEnabled } from './api';
 import QosPage from './QosPage';
 
-const DEFAULT_CENTER = [-6.372108269939045, 106.82424173608405]; 
+const DEFAULT_CENTER = [-6.372108269939045, 106.82424173608405];
+
+// Ikon pin merah dengan lingkaran target di ujung bawahnya
+const redPinIcon = L.divIcon({
+    className: 'custom-red-pin',
+    html: `
+      <div style="position: relative; width: 32px; height: 42px; display: flex; justify-content: center;">
+        <div style="position: absolute; bottom: -4px; width: 16px; height: 8px; background: rgba(239, 68, 68, 0.35); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 8px; height: 4px; background: #ef4444; border: 1.5px solid #ffffff; border-radius: 50%;"></div>
+        </div>
+        <svg viewBox="0 0 24 36" width="32" height="42" style="position: relative; z-index: 2; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.3));">
+          <path fill="#FF2A2A" d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24c0-6.6-5.4-12-12-12z"/>
+          <circle cx="12" cy="12" r="5" fill="#7A0019"/>
+        </svg>
+      </div>
+    `,
+    iconSize: [32, 42],
+    iconAnchor: [16, 42], // Ujung bawah pin menempel pas di titik koordinat
+    tooltipAnchor: [0, -42], // Posisi label tepat di atas kepala pin
+});
 
 // Komponen penyesuai ukuran kanvas Leaflet secara otomatis saat dimuat
 function MapResizeHandler() {
@@ -92,15 +111,15 @@ export default function Dashboard() {
 
     // Fungsi saat petugas menekan tombol "Selesaikan Penanganan" pada kartu
     const handleResolveSos = async (node) => {
-    if (!window.confirm(`Selesaikan SOS ${node.name}? Pastikan pendaki sudah aman.`)) return;
-    try {
-        await resolveSos(node.dbId);
-        // Tampilan langsung berubah; polling berikutnya mengonfirmasi dari server
-        setNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, isSos: false } : n)));
-        if (sosAlert && sosAlert.id === node.id) setSosAlert(null);
-    } catch (err) {
-        window.alert(`Gagal menyelesaikan SOS: ${err.message}`);
-    }
+        if (!window.confirm(`Selesaikan SOS ${node.name}? Pastikan pendaki sudah aman.`)) return;
+        try {
+            await resolveSos(node.dbId);
+            // Tampilan langsung berubah; polling berikutnya mengonfirmasi dari server
+            setNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, isSos: false } : n)));
+            if (sosAlert && sosAlert.id === node.id) setSosAlert(null);
+        } catch (err) {
+            window.alert(`Gagal menyelesaikan SOS: ${err.message}`);
+        }
     };
 
     return (
@@ -144,9 +163,9 @@ export default function Dashboard() {
 
             {/* Main Operational Grid */}
             {view === 'history' ? (
-            <SosHistory nodes={nodes} />
+                <SosHistory nodes={nodes} />
             ) : view === 'qos' && qosEnabled ? (
-            <QosPage />
+                <QosPage />
             ) : (
                 <main className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 bg-slate-100/70">
                     
@@ -175,8 +194,19 @@ export default function Dashboard() {
                                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                                     noWrap={true}
                                 />
-                                {nodes.filter((node) => node.hasLocation).map((node) => (
-                                    <Marker key={node.id} position={[node.lat, node.lng]}>
+                                {nodes.filter((node) => node.hasLocation).map((node, index) => (
+                                    <Marker 
+                                        key={node.id} 
+                                        position={[node.lat, node.lng]}
+                                        icon={redPinIcon}
+                                    >
+                                        {/* Label permanen Node 1, Node 2, Node 3 di atas pin */}
+                                        <Tooltip permanent direction="top" offset={[0, 0]}>
+                                            <span className="font-mono font-bold text-xs text-slate-900">
+                                                {`Node ${index + 1}`}
+                                            </span>
+                                        </Tooltip>
+
                                         <Popup>
                                             <div className="p-1 font-sans">
                                                 <div className="flex items-center justify-between gap-2">
