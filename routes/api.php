@@ -328,3 +328,4 @@ Route::post('/telemetry', function (Request $request) {
     ], 201);
 
 });
+require __DIR__ . '/qos.php';
