@@ -67,4 +67,51 @@ class QosTestController extends Controller
 
         return response()->json(['success' => true, 'data' => $test]);
     }
+
+        public function start($id)
+    {
+        return DB::transaction(function () use ($id) {
+            $test = QosTest::lockForUpdate()->find($id);
+
+            if (!$test) {
+                return response()->json(['success' => false, 'message' => 'Test not found'], 404);
+            }
+
+            if ($test->status !== 'pending') {
+                return response()->json(['success' => false, 'message' => 'Hanya sesi pending yang bisa dimulai'], 409);
+            }
+
+            if (QosTest::where('status', 'recording')->exists()) {
+                return response()->json(['success' => false, 'message' => 'Masih ada sesi lain yang sedang merekam'], 409);
+            }
+
+            $test->update(['status' => 'recording', 'started_at' => now()]);
+
+            return response()->json(['success' => true, 'data' => $test->fresh('nodes')]);
+        });
+    }
+
+    public function stop($id)
+    {
+        return DB::transaction(function () use ($id) {
+            $test = QosTest::lockForUpdate()->find($id);
+
+            if (!$test) {
+                return response()->json(['success' => false, 'message' => 'Test not found'], 404);
+            }
+
+            if ($test->status !== 'recording') {
+                return response()->json(['success' => false, 'message' => 'Hanya sesi recording yang bisa dihentikan'], 409);
+            }
+
+            $ended = now();
+            $test->update([
+                'status'           => 'completed',
+                'ended_at'         => $ended,
+                'duration_seconds' => $test->started_at->diffInSeconds($ended),
+            ]);
+
+            return response()->json(['success' => true, 'data' => $test->fresh('nodes')]);
+        });
+    }
 }

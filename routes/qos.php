@@ -15,5 +15,7 @@ Route::middleware([QosModuleEnabled::class])->group(function () {
         Route::get('/qos/tests', [QosTestController::class, 'index']);
         Route::post('/qos/tests', [QosTestController::class, 'store']);
         Route::get('/qos/tests/{id}', [QosTestController::class, 'show']);
+        Route::post('/qos/tests/{id}/start', [QosTestController::class, 'start']);
+        Route::post('/qos/tests/{id}/stop', [QosTestController::class, 'stop']);
     });
 });
