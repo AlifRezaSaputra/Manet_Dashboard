@@ -162,7 +162,11 @@ export default function QosPage({ nodes = [] }) {
                             </thead>
                             <tbody>
                                 {tests.map((t) => (
-                                    <tr key={t.id} className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer">
+                                    <tr
+                                        key={t.id}
+                                        onClick={() => setOpenId(t.id)}
+                                        className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
+                                    >
                                         <td className="px-4 py-3 font-bold text-slate-800 whitespace-nowrap">{t.test_code}</td>
                                         <td className="px-4 py-3">{t.name}</td>
                                         <td className="px-4 py-3 whitespace-nowrap">{TOPOLOGY_LABEL[t.topology_type] ?? t.topology_type}</td>
