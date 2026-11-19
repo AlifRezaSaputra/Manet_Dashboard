@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import { fetchDashboardNodes, resolveSos } from './api';
 import SosHistory from './SosHistory';
+import { fetchQosEnabled } from './api';
+import QosPage from './QosPage';
 
 const DEFAULT_CENTER = [-6.372108269939045, 106.82424173608405]; 
 
@@ -33,6 +35,13 @@ export default function Dashboard() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [view, setView] = useState('monitor'); // 'monitor' | 'history'
+    const [qosEnabled, setQosEnabled] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        fetchQosEnabled().then((ok) => { if (!cancelled) setQosEnabled(ok); });
+        return () => { cancelled = true; };
+    }, []);
 
     const [sosAlert, setSosAlert] = useState(null);
     const acknowledgedSos = useRef(new Set()); // "daftar centang" modal popup
@@ -102,7 +111,11 @@ export default function Dashboard() {
                     BASECAMP PENDAKIAN PUNCAK WANGU
                 </h1>
                 <nav className="ml-8 flex gap-2">
-                    {[['monitor', 'MONITORING'], ['history', 'RIWAYAT SOS']].map(([key, label]) => (
+                    {[
+                        ['monitor', 'MONITORING'],
+                        ['history', 'RIWAYAT SOS'],
+                        ...(qosEnabled ? [['qos', 'HITUNG QOS']] : []),
+                    ].map(([key, label]) => (
                         <button
                             key={key}
                             onClick={() => setView(key)}
@@ -132,6 +145,8 @@ export default function Dashboard() {
             {/* Main Operational Grid */}
             {view === 'history' ? (
             <SosHistory nodes={nodes} />
+            ) : view === 'qos' && qosEnabled ? (
+            <QosPage />
             ) : (
                 <main className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 bg-slate-100/70">
                     
