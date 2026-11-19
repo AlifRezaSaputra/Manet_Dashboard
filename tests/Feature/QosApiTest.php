@@ -168,4 +168,23 @@ class QosApiTest extends TestCase
         $this->expectException(\LogicException::class);
         $e->update(['node_id' => 'X']);
     }
+
+        public function test_events_index_returns_counts_and_latest(): void
+    {
+        $id = $this->makeTest();
+        $this->postJson("/api/qos/tests/$id/start", [], $this->auth());
+        $this->postJson("/api/qos/tests/$id/events", ['events' => [
+            $this->event('u1'),
+            $this->event('u2', ['packet_type' => 'HELLO', 'sequence_number' => null]),
+            $this->event('u3', ['sequence_number' => 2]),
+        ]])->assertJsonPath('accepted', 3);
+
+        $res = $this->getJson("/api/qos/tests/$id/events?limit=2", $this->auth());
+        $res->assertOk()->assertJsonPath('data.total', 3);
+        $this->assertCount(2, $res->json('data.latest'));
+        $this->assertSame(3, collect($res->json('data.by_type'))->sum('total'));
+
+        $this->getJson("/api/qos/tests/$id/events")->assertStatus(401);
+        $this->getJson('/api/qos/tests/99999/events', $this->auth())->assertStatus(404);
+    }
 }

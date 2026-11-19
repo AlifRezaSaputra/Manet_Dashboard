@@ -103,4 +103,34 @@ class QosEventController extends Controller
             'rejected'   => $rejected,
         ], 201);
     }
+
+        public function index(Request $request, $id)
+    {
+        $test = QosTest::find($id);
+
+        if (!$test) {
+            return response()->json(['success' => false, 'message' => 'Test not found'], 404);
+        }
+
+        $limit = min(max((int) $request->query('limit', 50), 1), 200);
+
+        $byType = QosEvent::where('qos_test_id', $test->id)
+            ->selectRaw('event_type, packet_type, COUNT(*) as total')
+            ->groupBy('event_type', 'packet_type')
+            ->get();
+
+        $latest = QosEvent::where('qos_test_id', $test->id)
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'total'   => QosEvent::where('qos_test_id', $test->id)->count(),
+                'by_type' => $byType,
+                'latest'  => $latest,
+            ],
+        ]);
+    }
 }
