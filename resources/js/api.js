@@ -124,3 +124,12 @@ export async function fetchSosHistory({ order = 'desc', node = '' } = {}) {
     const json = await getJson(`${API_BASE}/sos-history?${params}`);
     return json.data;
 }
+
+export async function fetchQosEnabled() {
+    try {
+        const res = await fetch('/api/qos/status', { headers: { Accept: 'application/json' } });
+        return res.ok;
+    } catch {
+        return false;
+    }
+}
