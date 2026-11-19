@@ -138,3 +138,23 @@ export async function fetchQosTests() {
     const json = await getJson('/api/qos/tests');
     return json.data;
 }
+
+export async function createQosTest(payload) {
+    const res = await fetch('/api/qos/tests', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+    });
+    if (res.status === 401) {
+        authToken = null;
+        onUnauthorized();
+        throw new Error('Sesi berakhir');
+    }
+    const json = await res.json().catch(() => ({}));
+    if (res.status === 422) {
+        const first = json.errors ? Object.values(json.errors).flat()[0] : null;
+        throw new Error(first || 'Data tidak valid');
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return json.data;
+}

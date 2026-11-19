@@ -165,7 +165,7 @@ export default function Dashboard() {
             {view === 'history' ? (
                 <SosHistory nodes={nodes} />
             ) : view === 'qos' && qosEnabled ? (
-                <QosPage />
+                <QosPage nodes={nodes} />
             ) : (
                 <main className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 bg-slate-100/70">
                     

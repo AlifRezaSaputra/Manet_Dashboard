@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { fetchQosTests } from './api';
+import QosCreateForm from './QosCreateForm';
 
 const TOPOLOGY_LABEL = {
     direct: 'Direct',
@@ -43,7 +44,8 @@ function StatCard({ label, value }) {
     );
 }
 
-export default function QosPage() {
+export default function QosPage({ nodes = [] }) {
+    const [creating, setCreating] = useState(false);
     const [tests, setTests] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -70,6 +72,18 @@ export default function QosPage() {
         };
     }, [tests]);
 
+    if (creating) {
+        return (
+            <main className="flex-1 p-6 bg-slate-100/70">
+                <QosCreateForm
+                    nodeOptions={nodes.map((n) => n.id)}
+                    onCancel={() => setCreating(false)}
+                    onCreated={() => { setCreating(false); setReloadKey((k) => k + 1); }}
+                />
+            </main>
+        );
+    }
+
     return (
         <main className="flex-1 p-6 bg-slate-100/70 space-y-6">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -93,12 +107,20 @@ export default function QosPage() {
                     <h2 className="font-mono font-bold text-sm uppercase text-slate-700 tracking-wider">
                         Sesi Pengujian QoS
                     </h2>
-                    <button
-                        onClick={() => setReloadKey((k) => k + 1)}
-                        className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-700 text-white text-xs font-mono font-bold active:scale-95 transition-all"
-                    >
-                        MUAT ULANG
-                    </button>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={() => setCreating(true)}
+                            className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-mono font-bold active:scale-95 transition-all"
+                        >
+                            + SESI BARU
+                        </button>
+                        <button
+                            onClick={() => setReloadKey((k) => k + 1)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-700 text-white text-xs font-mono font-bold active:scale-95 transition-all"
+                        >
+                            MUAT ULANG
+                        </button>
+                    </div>
                 </div>
 
                 {error && (
@@ -112,7 +134,7 @@ export default function QosPage() {
                 ) : tests.length === 0 && !error ? (
                     <div className="p-10 text-center">
                         <p className="font-mono font-bold text-slate-600">Belum ada sesi pengujian</p>
-                        <p className="text-xs text-slate-500 mt-1">Form pembuatan sesi menyusul di langkah berikutnya.</p>
+                        <p className="text-xs text-slate-500 mt-1">Klik "+ SESI BARU" untuk membuat sesi pertama.</p>
                     </div>
                 ) : (
                     <div className="overflow-x-auto">
