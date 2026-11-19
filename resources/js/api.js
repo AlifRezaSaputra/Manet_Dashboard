@@ -158,3 +158,31 @@ export async function createQosTest(payload) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return json.data;
 }
+
+async function qosRequest(url, method = 'GET') {
+    const res = await fetch(url, { method, headers: authHeaders() });
+    if (res.status === 401) {
+        authToken = null;
+        onUnauthorized();
+        throw new Error('Sesi berakhir');
+    }
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.message || `HTTP ${res.status}`);
+    return json;
+}
+
+export async function fetchQosTest(id) {
+    return (await qosRequest(`/api/qos/tests/${id}`)).data;
+}
+
+export async function startQosTest(id) {
+    return (await qosRequest(`/api/qos/tests/${id}/start`, 'POST')).data;
+}
+
+export async function stopQosTest(id) {
+    return (await qosRequest(`/api/qos/tests/${id}/stop`, 'POST')).data;
+}
+
+export async function fetchQosEvents(id, limit = 50) {
+    return (await qosRequest(`/api/qos/tests/${id}/events?limit=${limit}`)).data;
+}
