@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { fetchQosResults, recalculateQos } from './api';
+import {downloadQosReport} from './api';
 
 const TOPOLOGY_LABEL = { direct: 'Direct', one_relay: 'One Relay', two_relays: 'Two Relays' };
 
@@ -159,6 +160,7 @@ export default function QosResultPage({ testId, onBack, onOpenRecord }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [busy, setBusy] = useState(false);
+    const [pdfBusy, setPdfBusy] = useState(false);
 
     const load = useCallback(async () => {
         try {
@@ -182,6 +184,18 @@ export default function QosResultPage({ testId, onBack, onOpenRecord }) {
             setError(err.message);
         } finally {
             setBusy(false);
+        }
+    };
+
+    const exportPdf = async () => {
+        setPdfBusy(true);
+        setError(null);
+        try {
+            await downloadQosReport(testId, `${data.test.test_code}-report.pdf`);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setPdfBusy(false);
         }
     };
 
@@ -227,6 +241,13 @@ export default function QosResultPage({ testId, onBack, onOpenRecord }) {
                             className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-700 text-white text-xs font-mono font-bold disabled:opacity-50 active:scale-95 transition-all"
                         >
                             {busy ? 'MENGHITUNG...' : 'HITUNG ULANG'}
+                        </button>
+                        <button
+                            onClick={exportPdf}
+                            disabled={pdfBusy || t.status !== 'completed'}
+                            className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-700 text-white text-xs font-mono font-bold disabled:opacity-50 active:scale-95 transition-all"
+                        >
+                            {pdfBusy ? 'MENGUNDUH...' : 'UNDUH LAPORAN'}
                         </button>
                     </div>
                 </div>

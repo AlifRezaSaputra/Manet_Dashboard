@@ -266,4 +266,27 @@ class QosApiTest extends TestCase
             'radio_config' => ['sf' => 7, 'bw' => 125, 'cr' => 5, 'preamble' => 8],
         ], $this->auth())->assertStatus(201);
     }
+    
+    public function test_pdf_report_is_generated_for_completed_session(): void
+    {
+        $id = $this->makeTest();
+        $this->postJson("/api/qos/tests/$id/start", [], $this->auth());
+        $this->postJson("/api/qos/tests/$id/events", ['events' => [$this->event('u1')]]);
+        $this->postJson("/api/qos/tests/$id/stop", [], $this->auth());
+
+        $res = $this->get("/api/qos/tests/$id/report/pdf", $this->auth());
+
+        $res->assertOk();
+        $this->assertStringContainsString('application/pdf', $res->headers->get('Content-Type'));
+        $this->assertStringStartsWith('%PDF', $res->getContent());
+    }
+
+    public function test_pdf_report_rules(): void
+    {
+        $id = $this->makeTest();
+
+        $this->get("/api/qos/tests/$id/report/pdf")->assertStatus(401);
+        $this->get("/api/qos/tests/$id/report/pdf", $this->auth())->assertStatus(409);
+        $this->get('/api/qos/tests/99999/report/pdf', $this->auth())->assertStatus(404);
+    }
 }

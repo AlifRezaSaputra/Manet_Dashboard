@@ -9,6 +9,7 @@ use App\Services\QosCalculationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 use App\Services\QosAirtimeCalculator;
+use App\Services\QosReportService;
 
 class QosCalculationTest extends TestCase
 {
@@ -250,5 +251,34 @@ class QosCalculationTest extends TestCase
         $pdr = $this->metric($t, 'pdr');
         $this->assertNull($pdr->metric_value);
         $this->assertStringContainsString('source_id selain NODE01', $pdr->metadata['reason']);
+    }
+
+    public function test_report_data_distinguishes_na_from_zero(): void
+    {
+        $t = $this->makeSession();
+        (new QosCalculationService)->calculate($t);
+
+        $data = (new QosReportService)->data($t->fresh());
+        $pdr = collect($data['groups']['delivery'])->firstWhere('key', 'pdr');
+        $tx = collect($data['groups']['events'])->firstWhere('key', 'data_tx_count');
+
+        $this->assertSame('N/A', $pdr['display']);
+    }
+
+    public function test_report_extracts_observed_paths(): void
+    {
+        $t = $this->makeSession();
+        $raw = fn ($p) => "Isi paket: x | [METRIC,RX],node=NODE01,seq=1,hops=1,path=$p,battery_pct=58.0";
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 1, ['raw_event' => $raw('NODE01>BASE')]);
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 2, ['raw_event' => $raw('NODE01>BASE')]);
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 3, ['raw_event' => $raw('NODE01>NODE02>BASE')]);
+
+        (new QosCalculationService)->calculate($t);
+
+        $data = (new QosReportService)->data($t->fresh());
+        $paths = collect($data['observed_paths'])->pluck('count', 'path')->all();
+
+        $this->assertSame(2, $paths['NODE01>BASE']);
+        $this->assertSame(1, $paths['NODE01>NODE02>BASE']);
     }
 }

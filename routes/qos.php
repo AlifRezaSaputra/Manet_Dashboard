@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\QosTestController;
 use App\Http\Controllers\QosEventController;
 use App\Http\Controllers\QosResultController;
+use App\Http\Controllers\QosReportController;
 
 
 Route::middleware([QosModuleEnabled::class])->group(function () {
@@ -23,6 +24,7 @@ Route::middleware([QosModuleEnabled::class])->group(function () {
         Route::get('/qos/tests/{id}/events', [QosEventController::class, 'index']);
         Route::get('/qos/tests/{id}/results', [QosResultController::class, 'show']);
         Route::post('/qos/tests/{id}/calculate', [QosResultController::class, 'calculate']);
+        Route::get('/qos/tests/{id}/report/pdf', [QosReportController::class, 'pdf']);
     });
 
     Route::post('/qos/tests/{id}/events', [QosEventController::class, 'store']);

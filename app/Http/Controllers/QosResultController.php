@@ -8,7 +8,7 @@ use App\Services\QosCalculationService;
 
 class QosResultController extends Controller
 {
-    private const GROUPS = [
+    public const GROUPS = [
         'delivery'    => ['pdr', 'packet_loss', 'generated_packets', 'delivered_packets', 'lost_packets'],
         'performance' => ['throughput', 'e2e_delay'],
         'radio'       => ['avg_rssi', 'min_rssi', 'max_rssi', 'avg_snr', 'min_snr', 'max_snr'],
