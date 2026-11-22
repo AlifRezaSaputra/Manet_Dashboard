@@ -194,3 +194,24 @@ export async function fetchQosResults(id) {
 export async function recalculateQos(id) {
     return (await qosRequest(`/api/qos/tests/${id}/calculate`, 'POST')).data;
 }
+
+export async function downloadQosReport(id, filename) {
+    const res = await fetch(`/api/qos/tests/${id}/report/pdf`, { headers: authHeaders() });
+    if (res.status === 401) {
+        authToken = null;
+        onUnauthorized();
+        throw new Error('Sesi berakhir');
+    }
+    if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.message || `HTTP ${res.status}`);
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
