@@ -239,4 +239,16 @@ class QosCalculationTest extends TestCase
         $this->assertNull($this->metric($t, 'e2e_delay')->metric_value);
         $this->assertEquals(0, $this->metric($t, 'control_packet_count')->metric_value);
     }
+
+    public function test_na_reason_mentions_events_from_other_sources(): void
+    {
+        $t = $this->makeSession();
+        $this->ev($t, 'BASE', 'PACKET_RX', 'DATA', 1, ['source_id' => 'NODE02']);
+
+        (new QosCalculationService)->calculate($t);
+
+        $pdr = $this->metric($t, 'pdr');
+        $this->assertNull($pdr->metric_value);
+        $this->assertStringContainsString('source_id selain NODE01', $pdr->metadata['reason']);
+    }
 }

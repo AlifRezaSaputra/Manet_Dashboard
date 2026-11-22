@@ -26,10 +26,10 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
     const [notes, setNotes] = useState('');
     const [topology, setTopology] = useState('direct');
     const [path, setPath] = useState(DEFAULT_PATH.direct);
-    const [sf, setSf] = useState('');
-    const [bw, setBw] = useState('');
-    const [cr, setCr] = useState('');
-    const [preamble, setPreamble] = useState('');
+    const [sf, setSf] = useState('7');
+    const [bw, setBw] = useState('125');
+    const [cr, setCr] = useState('5');
+    const [preamble, setPreamble] = useState('8');
     const [confirmed, setConfirmed] = useState(false);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
@@ -147,7 +147,11 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
                     <label className={label}>Konfigurasi radio LoRa (opsional)</label>
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                         <input className={field} placeholder="SF (6-12)" value={sf} onChange={(e) => setSf(e.target.value)} inputMode="numeric" />
-                        <input className={field} placeholder="BW (kHz)" value={bw} onChange={(e) => setBw(e.target.value)} inputMode="decimal" />
+                        <select className={field} value={bw} onChange={(e) => setBw(e.target.value)}>
+                            {['7.8', '10.4', '15.6', '20.8', '31.25', '41.7', '62.5', '125', '250', '500'].map((v) => (
+                                <option key={v} value={v}>BW {v} kHz</option>
+                            ))}
+                        </select>
                         <input className={field} placeholder="CR (5-8)" value={cr} onChange={(e) => setCr(e.target.value)} inputMode="numeric" />
                         <input className={field} placeholder="Preamble" value={preamble} onChange={(e) => setPreamble(e.target.value)} inputMode="numeric" />
                     </div>

@@ -25,7 +25,7 @@ class StoreQosTestRequest extends FormRequest
             'nodes.*'               => 'required|string|max:30|distinct',
             'radio_config'          => 'nullable|array',
             'radio_config.sf'       => 'nullable|integer|between:6,12',
-            'radio_config.bw'       => 'nullable|numeric',
+            'radio_config.bw'       => 'nullable|numeric|in:7.8,10.4,15.6,20.8,31.25,41.7,62.5,125,250,500',
             'radio_config.cr'       => 'nullable|integer|between:5,8',
             'radio_config.preamble' => 'nullable|integer|min:0',
             'notes'                 => 'nullable|string',

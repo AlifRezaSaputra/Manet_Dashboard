@@ -186,3 +186,11 @@ export async function stopQosTest(id) {
 export async function fetchQosEvents(id, limit = 50) {
     return (await qosRequest(`/api/qos/tests/${id}/events?limit=${limit}`)).data;
 }
+
+export async function fetchQosResults(id) {
+    return (await qosRequest(`/api/qos/tests/${id}/results`)).data;
+}
+
+export async function recalculateQos(id) {
+    return (await qosRequest(`/api/qos/tests/${id}/calculate`, 'POST')).data;
+}
