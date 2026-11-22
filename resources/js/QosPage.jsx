@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { fetchQosTests } from './api';
 import QosCreateForm from './QosCreateForm';
 import QosRecordPage from './QosRecordPage';
+import QosResultPage from './QosResultPage';
 
 const TOPOLOGY_LABEL = {
     direct: 'Direct',
@@ -52,6 +53,7 @@ export default function QosPage({ nodes = [] }) {
     const [error, setError] = useState(null);
     const [reloadKey, setReloadKey] = useState(0);
     const [openId, setOpenId] = useState(null);
+    const [resultId, setResultId] = useState(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -75,12 +77,23 @@ export default function QosPage({ nodes = [] }) {
     }, [tests]);
 
     if (openId !== null) {
-    return (
-        <QosRecordPage
-            testId={openId}
-            onBack={() => { setOpenId(null); setReloadKey((k) => k + 1); }}
-        />
-    );
+        return (
+            <QosRecordPage
+                testId={openId}
+                onBack={() => { setOpenId(null); setReloadKey((k) => k + 1); }}
+                onOpenResult={() => { setResultId(openId); setOpenId(null); }}
+            />
+        );
+    }
+
+    if (resultId !== null) {
+        return (
+            <QosResultPage
+                testId={resultId}
+                onBack={() => { setResultId(null); setReloadKey((k) => k + 1); }}
+                onOpenRecord={() => { setOpenId(resultId); setResultId(null); }}
+            />
+        );
     }
 
     if (creating) {
@@ -163,8 +176,7 @@ export default function QosPage({ nodes = [] }) {
                             <tbody>
                                 {tests.map((t) => (
                                     <tr
-                                        key={t.id}
-                                        onClick={() => setOpenId(t.id)}
+                                        onClick={() => (t.status === 'completed' ? setResultId(t.id) : setOpenId(t.id))}
                                         className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
                                     >
                                         <td className="px-4 py-3 font-bold text-slate-800 whitespace-nowrap">{t.test_code}</td>

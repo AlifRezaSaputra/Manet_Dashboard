@@ -181,7 +181,17 @@ export default function QosRecordPage({ testId, onBack }) {
                         </button>
                     )}
                     {test.status === 'completed' && (
-                        <p className="text-xs font-mono text-slate-500">Rekaman selesai. Data mentah tersimpan dan tidak bisa diubah.</p>
+                        <>
+                            <p className="text-xs font-mono text-slate-500">Rekaman selesai. Data mentah tersimpan dan tidak bisa diubah.</p>
+                            {onOpenResult && (
+                                <button
+                                    onClick={onOpenResult}
+                                    className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-700 text-white font-mono font-bold text-sm active:scale-95 transition-all"
+                                >
+                                    LIHAT HASIL
+                                </button>
+                            )}
+                        </>
                     )}
                     {actionError && !confirmStop && (
                         <p role="alert" className="text-xs font-mono text-red-600">{actionError}</p>
