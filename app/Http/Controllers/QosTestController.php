@@ -129,12 +129,21 @@ class QosTestController extends Controller
             ], 409);
         }
 
-        $calculator->calculate($test);
+        try {
+            $calculator->calculate($test);
+            $calculated = true;
+            $message = 'Test stopped and QoS calculated successfully';
+        } catch (\Throwable $e) {
+            report($e);
+            $calculated = false;
+            $message = 'Test stopped, but QoS calculation failed. Use recalculate.';
+        }
 
         return response()->json([
-            'success' => true,
-            'message' => 'Test stopped and QoS calculated successfully',
-            'data' => $test,
+            'success'    => true,
+            'message'    => $message,
+            'calculated' => $calculated,
+            'data'       => $test,
         ]);
     }
 

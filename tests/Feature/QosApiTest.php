@@ -187,4 +187,83 @@ class QosApiTest extends TestCase
         $this->getJson("/api/qos/tests/$id/events")->assertStatus(401);
         $this->getJson('/api/qos/tests/99999/events', $this->auth())->assertStatus(404);
     }
+
+    public function test_stop_calculates_results(): void
+    {
+        $id = $this->makeTest();
+        $this->postJson("/api/qos/tests/$id/start", [], $this->auth());
+        $this->postJson("/api/qos/tests/$id/events", ['events' => [$this->event('u1')]]);
+
+        $this->postJson("/api/qos/tests/$id/stop", [], $this->auth())
+            ->assertOk()->assertJsonPath('calculated', true);
+
+        $this->assertGreaterThan(0, \App\Models\QosResult::where('qos_test_id', $id)->count());
+    }
+
+    public function test_active_test_endpoint(): void
+    {
+        $this->getJson('/api/qos/active-test')->assertOk()->assertJsonPath('active', false);
+
+        $id = $this->makeTest();
+        $this->postJson("/api/qos/tests/$id/start", [], $this->auth())->assertOk();
+
+        $this->getJson('/api/qos/active-test')
+            ->assertOk()->assertJsonPath('active', true)->assertJsonPath('data.id', $id);
+    }
+
+    public function test_results_are_grouped_and_na_is_flagged(): void
+    {
+        $id = $this->makeTest();
+        $this->postJson("/api/qos/tests/$id/start", [], $this->auth());
+        $this->postJson("/api/qos/tests/$id/events", ['events' => [$this->event('u1')]]);
+        $this->postJson("/api/qos/tests/$id/stop", [], $this->auth());
+
+        $res = $this->getJson("/api/qos/tests/$id/results", $this->auth())->assertOk();
+        $res->assertJsonPath('data.calculated', true);
+
+        $perf = collect($res->json('data.groups.performance'))->keyBy('key');
+        $this->assertFalse($perf['e2e_delay']['available']);
+        $this->assertNull($perf['e2e_delay']['value']);
+        $this->assertNotEmpty($perf['e2e_delay']['reason']);
+
+        $delivery = collect($res->json('data.groups.delivery'))->keyBy('key');
+        $this->assertTrue($delivery['delivered_packets']['available']);
+        $this->assertSame([], $res->json('data.groups.other'));
+    }
+
+    public function test_results_before_calculation_and_recalculate_rules(): void
+    {
+        $id = $this->makeTest();
+
+        $this->getJson("/api/qos/tests/$id/results", $this->auth())
+            ->assertOk()->assertJsonPath('data.calculated', false);
+
+        $this->postJson("/api/qos/tests/$id/calculate", [], $this->auth())->assertStatus(409);
+
+        $this->postJson("/api/qos/tests/$id/start", [], $this->auth());
+        $this->postJson("/api/qos/tests/$id/stop", [], $this->auth());
+
+        $before = \App\Models\QosResult::where('qos_test_id', $id)->count();
+        $this->postJson("/api/qos/tests/$id/calculate", [], $this->auth())->assertOk();
+        $this->assertSame($before, \App\Models\QosResult::where('qos_test_id', $id)->count());
+    }
+
+    public function test_results_require_auth_and_existing_test(): void
+    {
+        $this->getJson('/api/qos/tests/1/results')->assertStatus(401);
+        $this->getJson('/api/qos/tests/99999/results', $this->auth())->assertStatus(404);
+    }
+
+    public function test_invalid_lora_bandwidth_is_rejected(): void
+    {
+        $this->postJson('/api/qos/tests', [
+            'name' => 'T', 'topology_type' => 'direct', 'nodes' => ['NODE01', 'BASE'],
+            'radio_config' => ['sf' => 7, 'bw' => 16, 'cr' => 5, 'preamble' => 8],
+        ], $this->auth())->assertStatus(422);
+
+        $this->postJson('/api/qos/tests', [
+            'name' => 'T', 'topology_type' => 'direct', 'nodes' => ['NODE01', 'BASE'],
+            'radio_config' => ['sf' => 7, 'bw' => 125, 'cr' => 5, 'preamble' => 8],
+        ], $this->auth())->assertStatus(201);
+    }
 }

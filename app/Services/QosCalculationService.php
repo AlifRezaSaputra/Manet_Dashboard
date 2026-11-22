@@ -59,6 +59,13 @@ class QosCalculationService
             'duplicate_rx_events'    => $validRx->count() - $deliveredCount,
         ];
 
+        $foreign = QosEvent::where('qos_test_id', $test->id)
+            ->where('packet_type', 'DATA')
+            ->whereNotNull('source_id')
+            ->where('source_id', '!=', $source)
+            ->count();
+        $base['data_events_from_other_sources'] = $foreign;
+
         // --- Penyebut: paket yang dibuat sumber ---
         $tx = QosEvent::where('qos_test_id', $test->id)
             ->where('event_type', 'PACKET_TX')
@@ -94,6 +101,10 @@ class QosCalculationService
 
         if ($generated === null) {
             $reason = 'Tidak ada event DATA yang cukup untuk menentukan jumlah paket yang dibuat sumber.';
+            if ($foreign > 0) {
+                $reason .= " Ada {$foreign} event DATA dengan source_id selain {$source}; periksa node sumber pada sesi.";
+            }
+            
             $results['pdr']                = $na('%', $reason, $pdrMeta);
             $results['packet_loss']        = $na('%', $reason, $pdrMeta);
             $results['generated_packets']  = $na('packets', $reason, $pdrMeta);
