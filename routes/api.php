@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\DB;
 use App\Support\AdminToken;
 use App\Http\Middleware\AdminAuth;
 use Illuminate\Support\Facades\Hash;
+use Carbon\Carbon;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -222,6 +223,88 @@ Route::middleware([AdminAuth::class])->group(function () {
             'nodes' => $nodes,
         ]);
     });
+
+    Route::get('/dashboard/battery-export', function (Request $request) {
+
+        // Input waktu berasal dari datetime-local dalam WIB.
+        $validated = $request->validate([
+            'node' => 'required|integer|exists:node,id',
+            'start_time' => [
+                'required',
+                'date_format:Y-m-d\TH:i:s',
+            ],
+            'end_time' => [
+                'required',
+                'date_format:Y-m-d\TH:i:s',
+                'after:start_time',
+            ],
+        ]);
+
+        // Konversi waktu WIB menjadi UTC untuk query database.
+        $start = Carbon::createFromFormat(
+            'Y-m-d\TH:i:s',
+            $validated['start_time'],
+            'Asia/Jakarta'
+        )->utc();
+
+        $end = Carbon::createFromFormat(
+            'Y-m-d\TH:i:s',
+            $validated['end_time'],
+            'Asia/Jakarta'
+        )->utc();
+
+        $node = DB::table('node')
+            ->where('id', $validated['node'])
+            ->first();
+
+        $rows = DB::table('battery_status')
+            ->where('node_id', $node->id)
+            ->whereBetween('recorded_at', [$start, $end])
+            ->orderBy('recorded_at')
+            ->orderBy('id')
+            ->cursor();
+
+        $filename = 'battery_' . $node->node_id . '_'
+            . $start->format('Ymd_His') . '_to_'
+            . $end->format('Ymd_His') . '.csv';
+
+        return response()->streamDownload(function () use ($rows, $node) {
+
+            $output = fopen('php://output', 'w');
+
+            // BOM agar karakter UTF-8 terbaca dengan baik di Excel.
+            fwrite($output, "\xEF\xBB\xBF");
+
+            fputcsv($output, [
+                'timestamp_wib',
+                'node_code',
+                'node_name',
+                'voltage_v',
+                'battery_percent',
+            ]);
+
+            foreach ($rows as $row) {
+                $timestampWib = Carbon::parse(
+                    $row->recorded_at,
+                    'UTC'
+                )->setTimezone('Asia/Jakarta');
+
+                fputcsv($output, [
+                    $timestampWib->format('Y-m-d H:i:s'),
+                    $node->node_id,
+                    $node->node_name,
+                    $row->voltage,
+                    $row->battery_percent,
+                ]);
+            }
+
+            fclose($output);
+
+        }, $filename, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+        ]);
+    });
+
 });
 
 /*
