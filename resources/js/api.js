@@ -215,3 +215,21 @@ export async function downloadQosReport(id, filename) {
     a.remove();
     URL.revokeObjectURL(url);
 }
+
+export async function fetchBatteryHistory({
+    order = 'desc',
+    node = '',
+} = {}) {
+    const params = new URLSearchParams({ order });
+
+    if (node) params.set('node', node);
+
+    const json = await getJson(
+        `${API_BASE}/battery-history?${params}`
+    );
+
+    return {
+        rows: json.data,
+        nodes: json.nodes,
+    };
+}

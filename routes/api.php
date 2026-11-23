@@ -183,6 +183,45 @@ Route::middleware([AdminAuth::class])->group(function () {
         return response()->json(['success' => true, 'data' => $rows]);
     });
 
+    Route::get('/dashboard/battery-history', function (Request $request) {
+        $order = $request->query('order') === 'asc' ? 'asc' : 'desc';
+
+        $query = DB::table('battery_status')
+            ->join('node', 'node.id', '=', 'battery_status.node_id')
+            ->select(
+                'battery_status.id',
+                'battery_status.voltage',
+                'battery_status.battery_percent',
+                'battery_status.recorded_at',
+                'node.id as node_db_id',
+                'node.node_id as node_code',
+                'node.node_name'
+            );
+
+        if ($request->filled('node')) {
+            $query->where(
+                'battery_status.node_id',
+                (int) $request->query('node')
+            );
+        }
+
+        $rows = $query
+            ->orderBy('battery_status.recorded_at', $order)
+            ->orderBy('battery_status.id', $order)
+            ->limit(500)
+            ->get();
+
+        $nodes = DB::table('node')
+            ->select('id', 'node_id', 'node_name', 'node_type')
+            ->orderBy('node_id')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $rows,
+            'nodes' => $nodes,
+        ]);
+    });
 });
 
 /*
