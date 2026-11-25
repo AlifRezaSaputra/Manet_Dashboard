@@ -20,7 +20,7 @@ class StoreQosTestRequest extends FormRequest
         return [
             'name'                  => 'required|string|max:150',
             'description'           => 'nullable|string',
-            'topology_type'         => 'required|in:direct,one_relay,two_relays',
+            'topology_type'         => 'required|in:dynamic,direct,one_relay,two_relays',
             'nodes'                 => 'required|array|min:2|max:4',
             'nodes.*'               => 'required|string|max:30|distinct',
             'radio_config'          => 'nullable|array',

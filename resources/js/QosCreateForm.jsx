@@ -2,13 +2,14 @@ import React, { useState, useMemo } from 'react';
 import { createQosTest } from './api';
 
 const TOPOLOGIES = {
-    direct: { label: 'Direct', relays: 0 },
-    one_relay: { label: 'One Relay', relays: 1 },
-    two_relays: { label: 'Two Relays', relays: 2 },
+    dynamic: { label: 'Flexible / Auto-Discovery', relays: 0 },
+    direct: { label: 'Direct (Fixed)', relays: 0 },
+    one_relay: { label: 'One Relay (Fixed)', relays: 1 },
+    two_relays: { label: 'Two Relays (Fixed)', relays: 2 },
 };
 
-// Saran awal jalur per topologi (hanya default, bisa diubah di form)
 const DEFAULT_PATH = {
+    dynamic: ['AUTO', 'BASE'],
     direct: ['NODE01', 'BASE'],
     one_relay: ['NODE01', 'NODE02', 'BASE'],
     two_relays: ['NODE01', 'NODE02', 'NODE03', 'BASE'],
@@ -24,7 +25,8 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
     const [notes, setNotes] = useState('');
-    const [topology, setTopology] = useState('direct');
+    const [topology, setTopology] = useState('dynamic');
+    const [destination, setDestination] = useState('BASE');
     const [path, setPath] = useState(DEFAULT_PATH.direct);
     const [sf, setSf] = useState('7');
     const [bw, setBw] = useState('125');
@@ -39,9 +41,13 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
         return [...set];
     }, [nodeOptions]);
 
+    const isDynamic = topology === 'dynamic';
+
     const changeTopology = (t) => {
         setTopology(t);
-        setPath(DEFAULT_PATH[t]);
+        if (t !== 'dynamic') {
+            setPath(DEFAULT_PATH[t]);
+        }
         setConfirmed(false);
     };
 
@@ -50,7 +56,8 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
         setConfirmed(false);
     };
 
-    const hasDuplicate = new Set(path).size !== path.length;
+    const effectiveNodes = isDynamic ? ['AUTO', destination] : path;
+    const hasDuplicate = !isDynamic && new Set(path).size !== path.length;
     const canSubmit = name.trim() && !hasDuplicate && confirmed && !saving;
 
     const submit = async (e) => {
@@ -70,7 +77,7 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
                 name: name.trim(),
                 description: description.trim() || null,
                 topology_type: topology,
-                nodes: path,
+                nodes: effectiveNodes,
                 radio_config: Object.keys(radio).length ? radio : null,
                 notes: notes.trim() || null,
             });
@@ -96,7 +103,7 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
             <form onSubmit={submit} className="p-5 space-y-5">
                 <div>
                     <label className={label}>Nama pengujian</label>
-                    <input className={field} value={name} onChange={(e) => setName(e.target.value)} maxLength={150} />
+                    <input className={field} value={name} onChange={(e) => setName(e.target.value)} maxLength={150} placeholder="Contoh: Uji Multi-hop & Switching Node 2 Mati" />
                 </div>
 
                 <div>
@@ -105,7 +112,7 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
                 </div>
 
                 <div>
-                    <label className={label}>Topologi</label>
+                    <label className={label}>Mode Topologi</label>
                     <div className="flex flex-wrap gap-2">
                         {Object.entries(TOPOLOGIES).map(([key, t]) => (
                             <button
@@ -124,24 +131,38 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
                     </div>
                 </div>
 
-                <div>
-                    <label className={label}>Jalur node (peran disarankan otomatis)</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                        {path.map((nodeId, i) => (
-                            <div key={i}>
-                                <p className="text-[10px] font-mono uppercase text-slate-500 mb-1">
-                                    {i + 1}. {roleOf(i, path.length)}
-                                </p>
-                                <select className={field} value={nodeId} onChange={(e) => changeNode(i, e.target.value)}>
-                                    {options.map((o) => <option key={o} value={o}>{o}</option>)}
-                                </select>
-                            </div>
-                        ))}
+                {isDynamic ? (
+                    <div className="rounded-xl bg-cyan-50/70 border border-cyan-200 p-4 space-y-3">
+                        <p className="text-xs font-mono text-cyan-900">
+                            Semua node yang mengirim/meneruskan paket selama sesi akan direkam otomatis dan bisa difilter per-node pada halaman hasil.
+                        </p>
+                        <div className="max-w-xs">
+                            <label className={label}>Node Tujuan (Collector / Basecamp)</label>
+                            <select className={field} value={destination} onChange={(e) => { setDestination(e.target.value); setConfirmed(false); }}>
+                                {options.map((o) => <option key={o} value={o}>{o}</option>)}
+                            </select>
+                        </div>
                     </div>
-                    {hasDuplicate && (
-                        <p className="mt-2 text-xs font-mono text-red-600">Node tidak boleh dipakai dua kali dalam satu jalur.</p>
-                    )}
-                </div>
+                ) : (
+                    <div>
+                        <label className={label}>Jalur node (peran disarankan otomatis)</label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                            {path.map((nodeId, i) => (
+                                <div key={i}>
+                                    <p className="text-[10px] font-mono uppercase text-slate-500 mb-1">
+                                        {i + 1}. {roleOf(i, path.length)}
+                                    </p>
+                                    <select className={field} value={nodeId} onChange={(e) => changeNode(i, e.target.value)}>
+                                        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+                                    </select>
+                                </div>
+                            ))}
+                        </div>
+                        {hasDuplicate && (
+                            <p className="mt-2 text-xs font-mono text-red-600">Node tidak boleh dipakai dua kali dalam satu jalur.</p>
+                        )}
+                    </div>
+                )}
 
                 <div>
                     <label className={label}>Konfigurasi radio LoRa (opsional)</label>
@@ -163,11 +184,13 @@ export default function QosCreateForm({ nodeOptions, onCreated, onCancel }) {
                 </div>
 
                 <div className="rounded-xl bg-slate-50 border border-slate-200 p-4">
-                    <p className="text-[11px] font-mono font-bold uppercase text-slate-600 tracking-wider">Tinjau jalur</p>
-                    <p className="mt-1 text-sm font-mono font-bold text-slate-800">{path.join(' → ')}</p>
+                    <p className="text-[11px] font-mono font-bold uppercase text-slate-600 tracking-wider">Tinjau konfigurasi</p>
+                    <p className="mt-1 text-sm font-mono font-bold text-slate-800">
+                        {isDynamic ? `Semua Node (Auto) → ${destination}` : path.join(' → ')}
+                    </p>
                     <label className="mt-3 flex items-center gap-2 text-xs font-mono text-slate-700 cursor-pointer">
                         <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
-                        Saya sudah memeriksa dan mengonfirmasi jalur ini
+                        Saya sudah memeriksa dan mengonfirmasi pengaturan sesi ini
                     </label>
                 </div>
 
