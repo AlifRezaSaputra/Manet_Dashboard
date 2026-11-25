@@ -1,8 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { fetchQosResults, recalculateQos } from './api';
-import {downloadQosReport} from './api';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { fetchQosResults, recalculateQos, downloadQosReport } from './api';
 
-const TOPOLOGY_LABEL = { direct: 'Direct', one_relay: 'One Relay', two_relays: 'Two Relays' };
+const TOPOLOGY_LABEL = {
+    dynamic: 'Flexible / Auto-Discovery',
+    direct: 'Direct',
+    one_relay: 'One Relay',
+    two_relays: 'Two Relays',
+};
 
 const GROUP_TITLES = {
     delivery: 'Delivery Performance',
@@ -51,7 +55,6 @@ function formatValue(m) {
     return unit ? `${text} ${unit}` : text;
 }
 
-// DB menyimpan UTC; tampilkan sebagai WIB
 function formatTime(value) {
     if (!value) return '-';
     const d = new Date(value.length === 19 ? value.replace(' ', 'T') + 'Z' : value);
@@ -60,6 +63,24 @@ function formatTime(value) {
         timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', year: 'numeric',
         hour: '2-digit', minute: '2-digit', hour12: false,
     }) + ' WIB';
+}
+
+function resolveMetricForNode(m, selectedNode) {
+    if (selectedNode === 'ALL') return m;
+    const sub = m.metadata?.by_source?.[selectedNode];
+    if (!sub) return m;
+
+    const available = sub.value !== null && sub.value !== undefined;
+    return {
+        ...m,
+        value: sub.value,
+        unit: sub.unit ?? m.unit,
+        samples: sub.samples ?? 0,
+        available,
+        reason: sub.metadata?.reason ?? null,
+        note: sub.metadata?.note ?? null,
+        metadata: sub.metadata ?? {},
+    };
 }
 
 function MetricCard({ m }) {
@@ -157,6 +178,7 @@ function DeliveryBar({ metrics }) {
 
 export default function QosResultPage({ testId, onBack, onOpenRecord }) {
     const [data, setData] = useState(null);
+    const [selectedNode, setSelectedNode] = useState('ALL');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -174,6 +196,19 @@ export default function QosResultPage({ testId, onBack, onOpenRecord }) {
     }, [testId]);
 
     useEffect(() => { load(); }, [load]);
+
+    // Ambil daftar node dinamis dari metadata hasil kalkulasi
+    const availableNodes = useMemo(() => {
+        if (!data?.groups) return [];
+        const nodeSet = new Set();
+        Object.values(data.groups).forEach((metrics) => {
+            metrics.forEach((m) => {
+                (m.metadata?.available_nodes ?? []).forEach((n) => nodeSet.add(n));
+                Object.keys(m.metadata?.by_source ?? {}).forEach((n) => nodeSet.add(n));
+            });
+        });
+        return [...nodeSet];
+    }, [data]);
 
     const recalc = async () => {
         setBusy(true);
@@ -216,7 +251,15 @@ export default function QosResultPage({ testId, onBack, onOpenRecord }) {
 
     const t = data.test;
     const rc = t.radio_config;
-    const airtimeTotal = data.groups.airtime?.find((m) => m.key === 'airtime_total');
+
+    // Resolve semua grup metrik sesuai node yang dipilih
+    const resolvedGroups = Object.fromEntries(
+        Object.entries(data.groups).map(([group, metrics]) => [
+            group,
+            metrics.map((m) => resolveMetricForNode(m, selectedNode)),
+        ])
+    );
+    const airtimeTotal = resolvedGroups.airtime?.find((m) => m.key === 'airtime_total');
 
     return (
         <main className="flex-1 p-6 bg-slate-100/70 space-y-6">
@@ -254,9 +297,13 @@ export default function QosResultPage({ testId, onBack, onOpenRecord }) {
 
                 <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-mono">
                     <div>
-                        <p className="text-slate-500 uppercase text-[10px] tracking-wider">Topologi</p>
+                        <p className="text-slate-500 uppercase text-[10px] tracking-wider">Mode & Tujuan</p>
                         <p className="font-bold text-slate-800 mt-1">{TOPOLOGY_LABEL[t.topology_type] ?? t.topology_type}</p>
-                        <p className="text-slate-600 mt-1">{t.path.join(' → ')}</p>
+                        <p className="text-slate-600 mt-1">
+                            {t.topology_type === 'dynamic'
+                                ? `Semua Node → ${t.path?.[t.path.length - 1] ?? 'BASE'}`
+                                : t.path.join(' → ')}
+                        </p>
                     </div>
                     <div>
                         <p className="text-slate-500 uppercase text-[10px] tracking-wider">Durasi rekaman</p>
@@ -286,7 +333,46 @@ export default function QosResultPage({ testId, onBack, onOpenRecord }) {
                 </div>
             ) : (
                 <>
-                    {Object.entries(data.groups).map(([group, metrics]) => (
+                    {/* Bar Filter Node */}
+                    <section className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500">Filter Tampilan Hasil</p>
+                            <p className="text-xs font-mono text-slate-700 mt-0.5">
+                                {selectedNode === 'ALL'
+                                    ? `Agregat seluruh traffic yang terekam (${availableNodes.length} node terdeteksi)`
+                                    : `Traffic & aktivitas relay spesifik untuk ${selectedNode}`}
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setSelectedNode('ALL')}
+                                className={`px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold border transition-all ${
+                                    selectedNode === 'ALL'
+                                        ? 'bg-cyan-500 border-cyan-500 text-white shadow-sm'
+                                        : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                                }`}
+                            >
+                                SEMUA
+                            </button>
+                            {availableNodes.map((node) => (
+                                <button
+                                    key={node}
+                                    type="button"
+                                    onClick={() => setSelectedNode(node)}
+                                    className={`px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold border transition-all ${
+                                        selectedNode === node
+                                            ? 'bg-cyan-500 border-cyan-500 text-white shadow-sm'
+                                            : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    {node}
+                                </button>
+                            ))}
+                        </div>
+                    </section>
+
+                    {Object.entries(resolvedGroups).map(([group, metrics]) => (
                         metrics.length > 0 && (
                             <section key={group}>
                                 <h3 className="font-mono font-bold text-xs uppercase text-slate-700 tracking-wider mb-3">
@@ -305,8 +391,8 @@ export default function QosResultPage({ testId, onBack, onOpenRecord }) {
                         <h3 className="font-mono font-bold text-xs uppercase text-amber-800 tracking-wider">Batasan pengukuran</h3>
                         <ul className="mt-2 list-disc pl-5 space-y-1 text-xs text-amber-900">
                             <li>Airtime adalah perhitungan teoretis (rumus Semtech), bukan durasi radio terukur.</li>
-                            <li>Event hanya dari yang teramati di Basecamp. Event lokal relay belum diekspor ke collector.</li>
-                            <li>Tanpa event TX dari sumber, PDR diperkirakan dari celah nomor urut dan cenderung terlalu tinggi.</li>
+                            <li>Event hanya dari yang teramati di Basecamp. Event lokal relay hanya muncul jika log relay ikut diunggah.</li>
+                            <li>Tanpa event TX dari sumber, PDR diperkirakan dari celah nomor urut per sumber.</li>
                             <li>E2E delay tidak dihitung karena jam antar-node tidak tersinkronisasi.</li>
                             <li>Throughput adalah throughput aplikasi, bukan bit rate PHY LoRa.</li>
                             <li>Nilai N/A berarti data tidak tersedia, bukan nol.</li>

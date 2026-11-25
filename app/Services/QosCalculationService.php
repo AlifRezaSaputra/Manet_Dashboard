@@ -5,10 +5,11 @@ namespace App\Services;
 use App\Models\QosEvent;
 use App\Models\QosResult;
 use App\Models\QosTest;
+use Illuminate\Support\Collection;
 
 class QosCalculationService
 {
-    public const FORMULA_VERSION = 'v1';
+    public const FORMULA_VERSION = 'v2-flexible';
 
     /** Hitung semua metrik dan simpan (update jika sudah ada, tanpa duplikat). */
     public function calculate(QosTest $test): array
@@ -35,119 +36,208 @@ class QosCalculationService
     /** Hitung tanpa menyimpan. Nilai null berarti N/A. */
     public function compute(QosTest $test): array
     {
-        $source = $test->source_node_id;
-        $dest   = $test->destination_node_id;
+        $dest = $test->destination_node_id ?: 'BASE';
+        $isDynamic = $test->topology_type === 'dynamic' || empty($test->source_node_id);
+        $allEvents = QosEvent::where('qos_test_id', $test->id)->orderBy('id')->get();
 
-        // --- Paket DATA yang sampai di tujuan ---
-        $rx = QosEvent::where('qos_test_id', $test->id)
-            ->where('event_type', 'PACKET_RX')
-            ->where('packet_type', 'DATA')
-            ->where('node_id', $dest)
-            ->where('source_id', $source)
-            ->orderBy('id')
-            ->get(['id', 'boot_id', 'sequence_number', 'hop_count']);
+        // Kumpulkan semua node aktif yang muncul di sesi ini (kecuali destination/BASE)
+        $discoveredNodes = $allEvents
+            ->flatMap(fn ($e) => [$e->node_id, $e->source_id])
+            ->filter(fn ($id) => $id !== null && $id !== '' && $id !== $dest)
+            ->unique()
+            ->values()
+            ->all();
 
-        $validRx   = $rx->filter(fn ($e) => $e->boot_id !== null && $e->sequence_number !== null);
-        $delivered = $validRx->unique(fn ($e) => $e->boot_id . '|' . $e->sequence_number)->values();
-        $deliveredCount = $delivered->count();
+        natsort($discoveredNodes);
+        $discoveredNodes = array_values($discoveredNodes);
 
-        $base = [
-            'source'                 => $source,
-            'destination'            => $dest,
-            'rx_events_total'        => $rx->count(),
-            'rx_events_without_identity' => $rx->count() - $validRx->count(),
-            'duplicate_rx_events'    => $validRx->count() - $deliveredCount,
-        ];
+        // Metrik utama:
+        // - Dynamic: semua sumber + overhead/airtime se-jaringan
+        // - Fixed: sumber sesuai source_node_id, namun overhead/airtime/event tetap se-jaringan
+        $primary = $isDynamic
+            ? $this->computeScope($test, $allEvents, null, $dest, true)
+            : $this->computeScope($test, $allEvents, $test->source_node_id, $dest, true);
 
-        $foreign = QosEvent::where('qos_test_id', $test->id)
-            ->where('packet_type', 'DATA')
-            ->whereNotNull('source_id')
-            ->where('source_id', '!=', $source)
-            ->count();
-        $base['data_events_from_other_sources'] = $foreign;
-
-        // --- Penyebut: paket yang dibuat sumber ---
-        $tx = QosEvent::where('qos_test_id', $test->id)
-            ->where('event_type', 'PACKET_TX')
-            ->where('packet_type', 'DATA')
-            ->where('node_id', $source)
-            ->where('source_id', $source)
-            ->get(['boot_id', 'sequence_number'])
-            ->filter(fn ($e) => $e->boot_id !== null && $e->sequence_number !== null)
-            ->unique(fn ($e) => $e->boot_id . '|' . $e->sequence_number);
-
-        $generated = null;
-        $method = null;
-        $note = null;
-
-        if ($tx->count() > 0) {
-            $generated = $tx->count();
-            $method = 'tx_events';
-        } elseif ($deliveredCount > 0) {
-            $generated = $delivered->groupBy('boot_id')
-                ->sum(fn ($g) => $g->max('sequence_number') - $g->min('sequence_number') + 1);
-            $method = 'sequence_gap_estimate';
-            $note = 'Estimasi dari celah nomor urut. Paket hilang di awal/akhir urutan tidak terdeteksi, '
-                  . 'sehingga PDR cenderung terlalu tinggi.';
+        // Agregat ALL & breakdown per-node murni untuk tab filter di UI
+        $allAggregate = $isDynamic ? $primary : $this->computeScope($test, $allEvents, null, $dest, true);
+        $perNode = [];
+        foreach ($discoveredNodes as $nodeId) {
+            $perNode[$nodeId] = $this->computeScope($test, $allEvents, $nodeId, $dest, false);
         }
 
-        $pdrMeta = $base + ['denominator_method' => $method, 'note' => $note];
+        // Gabungkan breakdown ke dalam metadata['by_source'] tiap metrik
+        foreach ($primary as $metricKey => &$metric) {
+            $bySource = [];
+
+            if (!$isDynamic && isset($allAggregate[$metricKey])) {
+                $bySource['ALL'] = [
+                    'value'    => $allAggregate[$metricKey]['value'],
+                    'unit'     => $allAggregate[$metricKey]['unit'],
+                    'samples'  => $allAggregate[$metricKey]['samples'],
+                    'metadata' => $allAggregate[$metricKey]['metadata'],
+                ];
+            }
+
+            foreach ($discoveredNodes as $nodeId) {
+                if (isset($perNode[$nodeId][$metricKey])) {
+                    $sub = $perNode[$nodeId][$metricKey];
+                    $bySource[$nodeId] = [
+                        'value'    => $sub['value'],
+                        'unit'     => $sub['unit'],
+                        'samples'  => $sub['samples'],
+                        'metadata' => $sub['metadata'],
+                    ];
+                }
+            }
+
+            $metric['metadata']['available_nodes'] = $discoveredNodes;
+            $metric['metadata']['by_source'] = $bySource;
+        }
+        unset($metric);
+
+        return $primary;
+    }
+
+    /**
+     * Hitung seluruh metrik untuk scope tertentu:
+     * - $targetNode === null -> Semua traffic (agregat seluruh source menuju $dest)
+     * - $targetNode !== null -> Delivery/Throughput khusus $targetNode
+     * - $networkWideOverhead -> Jika true, event counts, overhead, dan airtime dihitung se-jaringan
+     */
+    private function computeScope(
+        QosTest $test,
+        Collection $allEvents,
+        ?string $targetNode,
+        string $dest,
+        bool $networkWideOverhead = false
+    ): array {
         $na = fn (string $unit, string $reason, array $meta = []) => [
             'value' => null, 'unit' => $unit, 'samples' => 0,
             'metadata' => $meta + ['reason' => $reason],
         ];
 
+        $packetKey = fn ($e) => ($e->source_id ?? 'UNKNOWN') . '|' . $e->boot_id . '|' . $e->sequence_number;
+
+        // --- Paket DATA yang sampai di tujuan ($dest) ---
+        $rxQuery = $allEvents->filter(fn ($e) =>
+            $e->event_type === 'PACKET_RX' &&
+            $e->packet_type === 'DATA' &&
+            $e->node_id === $dest &&
+            ($targetNode === null ? ($e->source_id !== null && $e->source_id !== $dest) : $e->source_id === $targetNode)
+        );
+
+        $validRx        = $rxQuery->filter(fn ($e) => $e->boot_id !== null && $e->sequence_number !== null);
+        $delivered      = $validRx->unique($packetKey)->values();
+        $deliveredCount = $delivered->count();
+
+        $base = [
+            'scope'                      => $targetNode ?? 'ALL',
+            'destination'                => $dest,
+            'rx_events_total'            => $rxQuery->count(),
+            'rx_events_without_identity' => $rxQuery->count() - $validRx->count(),
+            'duplicate_rx_events'        => $validRx->count() - $deliveredCount,
+        ];
+
+        // --- Penyebut: paket DATA yang dibuat sumber ---
+        $txQuery = $allEvents->filter(fn ($e) =>
+            $e->event_type === 'PACKET_TX' &&
+            $e->packet_type === 'DATA' &&
+            ($targetNode === null
+                ? ($e->source_id !== null && $e->node_id === $e->source_id)
+                : ($e->node_id === $targetNode && $e->source_id === $targetNode))
+        );
+
+        $txUnique = $txQuery
+            ->filter(fn ($e) => $e->boot_id !== null && $e->sequence_number !== null)
+            ->unique($packetKey);
+
+        $generated = null;
+        $method = null;
+        $note = null;
+
+        if ($txUnique->count() > 0) {
+            $generated = $txUnique->count();
+            $method = 'tx_events';
+        } elseif ($deliveredCount > 0) {
+            $generated = $delivered
+                ->groupBy(fn ($e) => ($e->source_id ?? 'UNKNOWN') . '|' . $e->boot_id)
+                ->sum(fn ($g) => $g->max('sequence_number') - $g->min('sequence_number') + 1);
+            $method = 'sequence_gap_estimate';
+            $note = 'Estimasi dari celah nomor urut per sumber. Paket hilang di awal/akhir urutan tidak terdeteksi.';
+        }
+
+        $foreign = $targetNode !== null
+            ? $allEvents->filter(fn ($e) =>
+                $e->packet_type === 'DATA' &&
+                $e->source_id !== null &&
+                $e->source_id !== $targetNode &&
+                $e->source_id !== $dest
+            )->count()
+            : 0;
+
+        $pdrMeta = $base + [
+            'denominator_method'             => $method,
+            'note'                           => $note,
+            'data_events_from_other_sources' => $foreign,
+        ];
         $results = [];
 
         if ($generated === null) {
-            $reason = 'Tidak ada event DATA yang cukup untuk menentukan jumlah paket yang dibuat sumber.';
-            if ($foreign > 0) {
-                $reason .= " Ada {$foreign} event DATA dengan source_id selain {$source}; periksa node sumber pada sesi.";
+            if ($targetNode !== null && $foreign > 0) {
+                $reason = "Tidak ada event DATA yang cukup untuk menentukan jumlah paket yang dibuat sumber. "
+                        . "Ada {$foreign} event DATA dengan source_id selain {$targetNode}; periksa node sumber pada sesi.";
+            } elseif ($targetNode !== null) {
+                $reason = "{$targetNode} tidak mengirim paket DATA sebagai sumber pada sesi ini (bisa jadi hanya berperan sebagai relay/kontrol).";
+            } else {
+                $reason = 'Tidak ada event DATA yang cukup untuk menentukan jumlah paket yang dibuat sumber.';
             }
-            
-            $results['pdr']                = $na('%', $reason, $pdrMeta);
-            $results['packet_loss']        = $na('%', $reason, $pdrMeta);
-            $results['generated_packets']  = $na('packets', $reason, $pdrMeta);
-            $results['lost_packets']       = $na('packets', $reason, $pdrMeta);
+
+            $results['pdr']               = $na('%', $reason, $pdrMeta);
+            $results['packet_loss']       = $na('%', $reason, $pdrMeta);
+            $results['generated_packets'] = $na('packets', $reason, $pdrMeta);
+            $results['lost_packets']      = $na('packets', $reason, $pdrMeta);
         } elseif ($deliveredCount > $generated) {
             $reason = 'Data tidak konsisten: paket terkirim melebihi paket yang tercatat dibuat sumber.';
-            $results['pdr']                = $na('%', $reason, $pdrMeta);
-            $results['packet_loss']        = $na('%', $reason, $pdrMeta);
-            $results['generated_packets']  = [
-                'value' => $generated, 'unit' => 'packets', 'samples' => $generated, 'metadata' => $pdrMeta,
-            ];
-            $results['lost_packets']       = $na('packets', $reason, $pdrMeta);
+            $results['pdr']               = $na('%', $reason, $pdrMeta);
+            $results['packet_loss']       = $na('%', $reason, $pdrMeta);
+            $results['generated_packets'] = ['value' => $generated, 'unit' => 'packets', 'samples' => $generated, 'metadata' => $pdrMeta];
+            $results['lost_packets']      = $na('packets', $reason, $pdrMeta);
         } else {
-            $pdr = $deliveredCount / $generated * 100;
+            $pdr = ($deliveredCount / $generated) * 100;
             $results['pdr']               = ['value' => $pdr, 'unit' => '%', 'samples' => $generated, 'metadata' => $pdrMeta];
             $results['packet_loss']       = ['value' => 100 - $pdr, 'unit' => '%', 'samples' => $generated, 'metadata' => $pdrMeta];
             $results['generated_packets'] = ['value' => $generated, 'unit' => 'packets', 'samples' => $generated, 'metadata' => $pdrMeta];
             $results['lost_packets']      = ['value' => $generated - $deliveredCount, 'unit' => 'packets', 'samples' => $generated, 'metadata' => $pdrMeta];
         }
 
-        // delivered_packets bisa dihitung selama ada event RX valid (bukan N/A jika 0 tapi ada TX)
         $results['delivered_packets'] = ($deliveredCount > 0 || $generated !== null)
             ? ['value' => $deliveredCount, 'unit' => 'packets', 'samples' => $deliveredCount, 'metadata' => $base]
-            : $na('packets', 'Tidak ada event DATA terkirim maupun event TX dari sumber.', $base);
+            : $na('packets', 'Tidak ada paket DATA terkirim dari scope ini.', $base);
 
-        // --- Hop count rata-rata dari paket unik yang terkirim ---
+        // --- Hop count rata-rata ---
         $hops = $delivered->pluck('hop_count')->filter(fn ($h) => $h !== null);
         $results['avg_hop_count'] = $hops->count() > 0
             ? [
                 'value' => $hops->avg(), 'unit' => 'hops', 'samples' => $hops->count(),
-                'metadata' => $base + ['note' => 'Diambil dari hop_count pada event RX pertama tiap paket unik. '
-                    . 'Makna pasti field ini menunggu konfirmasi firmware.'],
+                'metadata' => $base + ['note' => 'Rata-rata hop_count dari paket unik yang tiba di tujuan.'],
             ]
             : $na('hops', 'Tidak ada hop_count pada paket yang terkirim.', $base);
 
-                    // --- RSSI / SNR (hanya RX di tujuan dengan radio metrics valid) ---
-        $radio = QosEvent::where('qos_test_id', $test->id)
-            ->where('event_type', 'PACKET_RX')
-            ->where('node_id', $dest)
-            ->where('has_radio_metrics', true)
-            ->get(['rssi', 'snr']);
+        // --- RSSI / SNR ---
+        $radio = $allEvents->filter(function ($e) use ($targetNode, $dest, $networkWideOverhead) {
+            if ($e->event_type !== 'PACKET_RX' || !$e->has_radio_metrics) {
+                return false;
+            }
+            if ($targetNode === null || $networkWideOverhead) {
+                return $e->node_id === $dest;
+            }
+            return $e->node_id === $targetNode || ($e->node_id === $dest && $e->source_id === $targetNode);
+        });
 
-        $radioNote = 'Hanya event RX di node tujuan. Event relay belum diekspor ke collector.';
+        $radioNote = ($targetNode && !$networkWideOverhead)
+            ? "Event RX dengan metrik radio yang melibatkan {$targetNode}."
+            : "Event RX di {$dest} dengan metrik radio valid.";
+
         foreach (['rssi' => ['dBm', 'rssi'], 'snr' => ['dB', 'snr']] as $name => [$unit, $col]) {
             $vals = $radio->pluck($col)->filter(fn ($v) => $v !== null)->values();
             if ($vals->count() > 0) {
@@ -163,74 +253,103 @@ class QosCalculationService
         }
 
         // --- Throughput aplikasi ---
-        $payloadBytes = QosEvent::where('qos_test_id', $test->id)
-            ->where('event_type', 'PACKET_RX')->where('packet_type', 'DATA')
-            ->where('node_id', $dest)->where('source_id', $source)
-            ->whereNotNull('boot_id')->whereNotNull('sequence_number')
-            ->whereNotNull('payload_length')
-            ->orderBy('id')
-            ->get(['boot_id', 'sequence_number', 'payload_length'])
-            ->unique(fn ($e) => $e->boot_id . '|' . $e->sequence_number)
+        $payloadBytes = $validRx
+            ->filter(fn ($e) => $e->payload_length !== null)
+            ->unique($packetKey)
             ->sum('payload_length');
 
         $duration = $test->duration_seconds;
         $tpMeta = [
-            'duration_seconds' => $duration,
+            'duration_seconds'        => $duration,
             'delivered_payload_bytes' => (int) $payloadBytes,
-            'note' => 'Throughput aplikasi (payload terkirim / durasi rekaman), bukan bit rate PHY LoRa.',
+            'note'                    => 'Throughput aplikasi (payload unik terkirim / durasi rekaman).',
         ];
         $results['throughput'] = ($duration && $duration > 0 && $payloadBytes > 0)
-            ? ['value' => $payloadBytes * 8 / $duration, 'unit' => 'bps', 'samples' => $deliveredCount, 'metadata' => $tpMeta]
+            ? ['value' => ($payloadBytes * 8) / $duration, 'unit' => 'bps', 'samples' => $deliveredCount, 'metadata' => $tpMeta]
             : $na('bps', 'Durasi rekaman atau payload_length terkirim tidak tersedia.', $tpMeta);
 
         // --- Hitungan event ---
-        $count = fn ($q) => $q->count();
-        $evt = fn () => QosEvent::where('qos_test_id', $test->id);
+        $isNodeOnly = $targetNode !== null && !$networkWideOverhead;
+        $scopedEvents = $isNodeOnly
+            ? $allEvents->filter(fn ($e) => $e->node_id === $targetNode || $e->source_id === $targetNode)
+            : $allEvents;
 
         $results['data_tx_count'] = [
-            'value' => $evt()->where('event_type', 'PACKET_TX')->where('packet_type', 'DATA')->count(),
-            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'Hanya event TX yang sampai ke collector.'],
+            'value' => $allEvents->filter(fn ($e) =>
+                $e->event_type === 'PACKET_TX' && $e->packet_type === 'DATA' &&
+                (!$isNodeOnly || $e->node_id === $targetNode)
+            )->count(),
+            'unit' => 'events', 'samples' => 0,
+            'metadata' => ['note' => $isNodeOnly ? "Total TX DATA oleh {$targetNode} (sumber + relay)." : 'Semua event TX DATA yang tercatat.'],
         ];
+
         $results['data_rx_count'] = [
-            'value' => $evt()->where('event_type', 'PACKET_RX')->where('packet_type', 'DATA')->count(),
-            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'Semua event RX DATA yang tercatat, termasuk duplikat.'],
+            'value' => $isNodeOnly
+                ? $rxQuery->count()
+                : $allEvents->filter(fn ($e) => $e->event_type === 'PACKET_RX' && $e->packet_type === 'DATA')->count(),
+            'unit' => 'events', 'samples' => 0,
+            'metadata' => ['note' => 'Semua event RX DATA yang tercatat, termasuk duplikat.'],
         ];
+
         $results['forwarding_count'] = [
-            'value' => $evt()->where('event_type', 'PACKET_TX')->where('packet_type', 'DATA')->where('node_id', '!=', $source)->count(),
-            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'TX DATA oleh node selain sumber. 0 bisa berarti relay belum mengekspor event.'],
+            'value' => $allEvents->filter(function ($e) use ($targetNode, $isNodeOnly) {
+                if ($e->event_type !== 'PACKET_TX' || $e->packet_type !== 'DATA') {
+                    return false;
+                }
+                if ($isNodeOnly) {
+                    return $e->source_id !== null && $e->node_id !== $e->source_id && $e->node_id === $targetNode;
+                }
+                return $targetNode !== null
+                    ? $e->node_id !== $targetNode
+                    : ($e->source_id !== null && $e->node_id !== $e->source_id);
+            })->count(),
+            'unit' => 'events', 'samples' => 0,
+            'metadata' => ['note' => $isNodeOnly
+                ? "Paket DATA milik node lain yang di-forward/relay oleh {$targetNode}."
+                : 'Total paket DATA yang diteruskan oleh node selain sumber.'],
         ];
+
         $results['duplicate_count'] = [
             'value' => $base['duplicate_rx_events'],
-            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'Event RX DATA di tujuan dengan identitas paket yang sama.'],
+            'unit' => 'events', 'samples' => 0,
+            'metadata' => ['note' => 'Event RX DATA di tujuan dengan identitas paket yang sama.'],
         ];
+
         $results['dropped_count'] = [
-            'value' => $evt()->where(fn ($q) => $q->where('event_status', 'failed')->orWhereNotNull('drop_reason'))->count(),
-            'unit' => 'events', 'samples' => 0, 'metadata' => ['note' => 'Event dengan status failed atau drop_reason terisi.'],
+            'value' => $scopedEvents->filter(fn ($e) => $e->event_status === 'failed' || $e->drop_reason !== null)->count(),
+            'unit' => 'events', 'samples' => 0,
+            'metadata' => ['note' => 'Event dengan status failed atau drop_reason terisi.'],
         ];
+
         $results['retransmission_count'] = $na('events', 'Firmware belum menyediakan penanda retransmisi pada event.');
-        
-                // --- Basis: TX bila ada (transmisi nyata), jika tidak RX (yang teramati) ---
-        $hasTx = QosEvent::where('qos_test_id', $test->id)->where('event_type', 'PACKET_TX')->exists();
+
+        // --- Routing overhead & Airtime ---
+        $nodeBasisAll = $isNodeOnly
+            ? $allEvents->filter(fn ($e) => $e->node_id === $targetNode)
+            : $allEvents;
+
+        $hasTx = $nodeBasisAll->contains(fn ($e) => $e->event_type === 'PACKET_TX');
         $basis = $hasTx ? 'PACKET_TX' : 'PACKET_RX';
         $basisNote = $hasTx
-            ? 'Dihitung dari event PACKET_TX yang sampai ke collector.'
-            : 'Tidak ada event TX; dihitung dari event PACKET_RX yang teramati. Nilai cenderung lebih rendah dari transmisi sebenarnya.';
+            ? 'Dihitung dari event PACKET_TX yang tercatat.'
+            : 'Tidak ada event TX; dihitung dari event PACKET_RX yang teramati.';
 
         $controlTypes = ['HELLO', 'RREQ', 'RREP', 'RERR', 'ACK'];
-        $basisEvents = QosEvent::where('qos_test_id', $test->id)
-            ->where('event_type', $basis)
-            ->get(['node_id', 'packet_type', 'payload_length']);
+        $basisEvents = $nodeBasisAll->filter(fn ($e) => $e->event_type === $basis);
 
-        // --- Routing overhead ---
         $ohMeta = [
-            'basis' => $basis,
-            'note' => $basisNote,
+            'basis'         => $basis,
+            'note'          => $basisNote,
             'control_types' => $controlTypes,
         ];
 
         if ($basisEvents->isEmpty()) {
-            foreach (['control_packet_count' => 'events', 'control_packet_bytes' => 'bytes',
-                      'control_to_data_packet_ratio' => 'ratio', 'control_to_data_byte_ratio' => 'ratio'] as $k => $u) {
+            foreach ([
+                'control_packet_count'         => 'events',
+                'control_packet_bytes'         => 'bytes',
+                'control_to_data_packet_ratio' => 'ratio',
+                'control_to_data_byte_ratio'   => 'ratio',
+            ] as $k => $u) {
                 $results[$k] = $na($u, 'Tidak ada event paket yang tercatat.', $ohMeta);
             }
         } else {
@@ -242,9 +361,10 @@ class QosCalculationService
             $dataWithLen = $data->filter(fn ($e) => $e->payload_length !== null);
             $ctrlBytes = (int) $ctrlWithLen->sum('payload_length');
             $dataBytes = (int) $dataWithLen->sum('payload_length');
+
             $ohMeta += [
                 'control_events_without_payload_length' => $ctrlCount - $ctrlWithLen->count(),
-                'data_events_without_payload_length' => $dataCount - $dataWithLen->count(),
+                'data_events_without_payload_length'    => $dataCount - $dataWithLen->count(),
             ];
 
             $results['control_packet_count'] = ['value' => $ctrlCount, 'unit' => 'events', 'samples' => $ctrlCount, 'metadata' => $ohMeta];
@@ -265,20 +385,23 @@ class QosCalculationService
 
         if ($cfg === null) {
             $reason = 'Konfigurasi radio (SF, BW, CR, preamble) belum lengkap pada sesi ini.';
-            foreach ($airKeys as $k => $u) $results[$k] = $na($u, $reason);
+            foreach ($airKeys as $k => $u) {
+                $results[$k] = $na($u, $reason);
+            }
         } else {
             $timed = $basisEvents->filter(fn ($e) => $e->payload_length !== null);
             $airMeta = [
-                'kind' => 'theoretical',
-                'basis' => $basis,
-                'note' => $basisNote . ' Memakai payload_length sebagai ukuran payload yang dikirim radio; '
-                        . 'perlu dikonfirmasi firmware. Ini airtime teoretis, bukan durasi radio terukur.',
-                'radio' => $cfg,
+                'kind'                          => 'theoretical',
+                'basis'                         => $basis,
+                'note'                          => $basisNote . ' Airtime teoretis rumus Semtech.',
+                'radio'                         => $cfg,
                 'events_without_payload_length' => $basisEvents->count() - $timed->count(),
             ];
 
             if ($timed->isEmpty()) {
-                foreach ($airKeys as $k => $u) $results[$k] = $na($u, 'Tidak ada event dengan payload_length.', $airMeta);
+                foreach ($airKeys as $k => $u) {
+                    $results[$k] = $na($u, 'Tidak ada event dengan payload_length.', $airMeta);
+                }
             } else {
                 $ms = fn ($e) => QosAirtimeCalculator::packetSeconds((int) $e->payload_length, $cfg) * 1000;
                 $dataMs = $timed->where('packet_type', 'DATA')->sum($ms);
@@ -287,7 +410,7 @@ class QosCalculationService
                 $n = $timed->count();
 
                 $byNode = $timed->groupBy('node_id')->map(fn ($g) => [
-                    'airtime_ms' => round($g->sum($ms), 3),
+                    'airtime_ms'    => round($g->sum($ms), 3),
                     'transmissions' => $g->count(),
                 ])->all();
 
@@ -299,8 +422,7 @@ class QosCalculationService
         }
 
         // E2E delay: jam millis() antar-ESP32 tidak sinkron
-        $results['e2e_delay'] = $na('ms', 'Tidak dihitung: jam millis() antar node tidak tersinkronisasi. '
-            . 'Selisih timestamp lintas node tidak valid tanpa metode sinkronisasi yang tervalidasi.');
+        $results['e2e_delay'] = $na('ms', 'Tidak dihitung: jam millis() antar node tidak tersinkronisasi.');
 
         return $results;
     }
