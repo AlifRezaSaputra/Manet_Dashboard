@@ -4,6 +4,7 @@ import L from 'leaflet';
 import { fetchDashboardNodes, resolveSos, fetchQosEnabled } from './api';
 import SosHistory from './SosHistory';
 import QosPage from './QosPage';
+import BatteryHistory from './BatteryHistory';
 
 const DEFAULT_CENTER = [-6.372108269939045, 106.82424173608405];
 
@@ -133,6 +134,7 @@ export default function Dashboard() {
                     {[
                         ['monitor', 'MONITORING'],
                         ['history', 'RIWAYAT SOS'],
+                        ['battery', 'BATTERY HISTORY'],
                         ...(qosEnabled ? [['qos', 'HITUNG QOS']] : []),
                     ].map(([key, label]) => (
                         <button
@@ -166,6 +168,8 @@ export default function Dashboard() {
                 <SosHistory nodes={nodes} />
             ) : view === 'qos' && qosEnabled ? (
                 <QosPage nodes={nodes} />
+            ) : view === 'battery' ? (
+                <BatteryHistory />
             ) : (
                 <main className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 bg-slate-100/70">
                     

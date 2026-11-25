@@ -215,3 +215,77 @@ export async function downloadQosReport(id, filename) {
     a.remove();
     URL.revokeObjectURL(url);
 }
+
+export async function fetchBatteryHistory({
+    order = 'desc',
+    node = '',
+} = {}) {
+    const params = new URLSearchParams({ order });
+
+    if (node) params.set('node', node);
+
+    const json = await getJson(
+        `${API_BASE}/battery-history?${params}`
+    );
+
+    return {
+        rows: json.data,
+        nodes: json.nodes,
+    };
+}
+
+
+export async function downloadBatteryExport({
+    node,
+    startTime,
+    endTime,
+}) {
+    const params = new URLSearchParams({
+        node: String(node),
+        start_time: startTime.length === 16
+            ? `${startTime}:00`
+            : startTime,
+        end_time: endTime.length === 16
+            ? `${endTime}:00`
+            : endTime,
+    });
+
+    const res = await fetch(
+        `${API_BASE}/battery-export?${params}`,
+        { headers: authHeaders() }
+    );
+
+    if (res.status === 401) {
+        authToken = null;
+        onUnauthorized();
+        throw new Error('Sesi berakhir');
+    }
+
+    if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        const firstError = json.errors
+            ? Object.values(json.errors).flat()[0]
+            : null;
+
+        throw new Error(
+            firstError || json.message || `HTTP ${res.status}`
+        );
+    }
+
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition');
+
+    const filenameMatch = disposition?.match(/filename="?([^"]+)"?/i);
+    const filename = filenameMatch?.[1] || 'battery-export.csv';
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
